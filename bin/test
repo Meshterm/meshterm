@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# Run the meshterm test suite
+#
+# Usage:
+#   bin/test              # Run all tests
+#   bin/test unit         # Run unit tests only
+#   bin/test integration  # Run integration tests only
+#   bin/test ui           # Run UI tests only
+#   bin/test --cov        # Run with coverage report
+#   bin/test -k "pattern" # Run tests matching pattern
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$PROJECT_DIR/venv"
+
+# Check if venv exists
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Virtual environment not found. Run bin/install first."
+    exit 1
+fi
+
+# Activate venv
+source "$VENV_DIR/bin/activate"
+
+# Default pytest args
+PYTEST_ARGS="-v --tb=short"
+
+# Handle special first argument for test categories
+case "${1:-}" in
+    unit)
+        shift
+        PYTEST_ARGS="$PYTEST_ARGS tests/unit/ $*"
+        ;;
+    integration)
+        shift
+        PYTEST_ARGS="$PYTEST_ARGS tests/integration/ $*"
+        ;;
+    ui)
+        shift
+        PYTEST_ARGS="$PYTEST_ARGS tests/ui/ -m ui $*"
+        ;;
+    --cov)
+        shift
+        PYTEST_ARGS="$PYTEST_ARGS --cov=meshterm --cov-report=term-missing tests/ $*"
+        ;;
+    "")
+        PYTEST_ARGS="$PYTEST_ARGS tests/"
+        ;;
+    *)
+        # Pass all args directly to pytest
+        PYTEST_ARGS="$PYTEST_ARGS tests/ $*"
+        ;;
+esac
+
+echo "Running: pytest $PYTEST_ARGS"
+exec pytest $PYTEST_ARGS

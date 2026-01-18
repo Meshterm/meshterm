@@ -1,0 +1,47 @@
+# Virtual environment
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Distribution
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+tmp/
+*.log
+
+# Claude Code local settings
+.claude/
+
+# Sensitive operational data (GPS, device IDs, messages)
+*.db
+meshterm_config.json
+config.json
+
+# Prevent accidental XDG data commits
+.local/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/

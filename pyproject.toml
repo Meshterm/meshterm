@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meshterm"
+version = "0.1.0"
+description = "A terminal user interface (TUI) for Meshtastic mesh networks"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "meshterm contributors"}
+]
+keywords = ["meshtastic", "mesh", "radio", "tui", "terminal", "lora"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Ham Radio",
+    "Topic :: Terminals",
+]
+dependencies = [
+    "meshtastic>=2.0.0",
+    "textual>=0.40.0",
+    "reverse_geocoder",
+    "pgeocode",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-textual-snapshot>=1.0.0",
+    "black",
+    "ruff",
+]
+
+[project.scripts]
+meshterm = "meshterm.app:main"
+
+# [project.urls]
+# Homepage = "https://github.com/YOURUSER/meshterm"
+# Repository = "https://github.com/YOURUSER/meshterm"
+# Issues = "https://github.com/YOURUSER/meshterm/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["meshterm*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ["-v", "--tb=short"]
+markers = [
+    "ui: tests using Textual Pilot",
+    "snapshot: visual regression tests",
+]
+
+[tool.coverage.run]
+source = ["meshterm"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 30

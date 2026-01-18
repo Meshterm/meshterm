@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+cd "$PROJECT_DIR"
+
+# Check if venv exists
+if [ ! -d "venv" ]; then
+    echo "Virtual environment not found. Run bin/install first."
+    exit 1
+fi
+
+# Run meshterm
+exec venv/bin/python -m meshterm.app "$@"
