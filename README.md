@@ -1,12 +1,4 @@
-# README
-
-> #     #                      #######
-> ##   ## ######  ####  #    #    #    ###### #####  #    #
-> # # # # #      #      #    #    #    #      #    # ##  ##
-> #  #  # #####   ####  ######    #    #####  #    # # ## #
-> #     # #           # #    #    #    #      #####  #    #
-> #     # #      #    # #    #    #    #      #   #  #    #
-> #     # ######  ####  #    #    #    ###### #    # #    #
+# MeshTerm
 
 A terminal user interface (TUI) for monitoring and interacting with Meshtastic mesh networks.
 
