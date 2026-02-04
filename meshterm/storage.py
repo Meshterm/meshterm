@@ -402,6 +402,116 @@ class LogStorage:
         row = cursor.fetchone()
         return row[0] if row else None
 
+    def _find_nodes_by_name(self, term: str) -> List[str]:
+        """Find node IDs whose names match the search term.
+
+        Searches only shortName and longName fields, not entire JSON blob.
+        """
+        search_pattern = f"%{term}%"
+        cursor = self._conn.execute(
+            """SELECT node_id FROM nodes
+            WHERE json_extract(data, '$.user.shortName') LIKE ? COLLATE NOCASE
+               OR json_extract(data, '$.user.longName') LIKE ? COLLATE NOCASE""",
+            [search_pattern, search_pattern]
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def search_packets(
+        self,
+        term: str,
+        limit: int = 100,
+        before_id: Optional[int] = None,
+    ) -> List[StoredMessage]:
+        """Search packets by node names or text message content.
+
+        Only searches human-readable fields:
+        - Node shortName and longName (via nodes table)
+        - Text message content (extracted from payload JSON)
+
+        Args:
+            term: Search term (case-insensitive LIKE match)
+            limit: Maximum number of results to return
+            before_id: Return results with id < this value (for pagination)
+
+        Returns:
+            List of matching StoredMessage objects, ordered by id DESC
+        """
+        search_pattern = f"%{term}%"
+
+        # Find node IDs whose names match the search term
+        matching_node_ids = self._find_nodes_by_name(term)
+
+        # Search only text messages by content, or packets from/to matching nodes
+        query = """
+            SELECT * FROM packets
+            WHERE (
+                -- Text message content (using json_extract for SQLite)
+                (portnum IN ('TEXT_MESSAGE_APP', '1')
+                 AND json_extract(payload, '$.text') LIKE ? COLLATE NOCASE)
+        """
+        params = [search_pattern]
+
+        # Include packets from/to nodes whose names match
+        if matching_node_ids:
+            placeholders = ','.join('?' for _ in matching_node_ids)
+            query += f" OR from_node IN ({placeholders})"
+            query += f" OR to_node IN ({placeholders})"
+            params.extend(matching_node_ids)
+            params.extend(matching_node_ids)
+
+        query += ")"
+
+        if before_id is not None:
+            query += " AND id < ?"
+            params.append(before_id)
+
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = self._conn.execute(query, params)
+        return [self._row_to_stored_message(row) for row in cursor.fetchall()]
+
+    def count_search_results(self, term: str) -> int:
+        """Count total matching packets for a search term.
+
+        Only counts matches in human-readable fields:
+        - Node shortName and longName (via nodes table)
+        - Text message content (extracted from payload JSON)
+
+        Args:
+            term: Search term (case-insensitive LIKE match)
+
+        Returns:
+            Total count of matching packets
+        """
+        search_pattern = f"%{term}%"
+
+        # Find node IDs whose names match the search term
+        matching_node_ids = self._find_nodes_by_name(term)
+
+        # Count only text messages by content, or packets from/to matching nodes
+        query = """
+            SELECT COUNT(*) FROM packets
+            WHERE (
+                -- Text message content (using json_extract for SQLite)
+                (portnum IN ('TEXT_MESSAGE_APP', '1')
+                 AND json_extract(payload, '$.text') LIKE ? COLLATE NOCASE)
+        """
+        params = [search_pattern]
+
+        # Include packets from/to nodes whose names match
+        if matching_node_ids:
+            placeholders = ','.join('?' for _ in matching_node_ids)
+            query += f" OR from_node IN ({placeholders})"
+            query += f" OR to_node IN ({placeholders})"
+            params.extend(matching_node_ids)
+            params.extend(matching_node_ids)
+
+        query += ")"
+
+        cursor = self._conn.execute(query, params)
+        return cursor.fetchone()[0]
+
     def store_node(self, node_id: str, data: dict):
         """Store or update a node's data as JSON."""
         node_id_str = format_node_id(node_id)

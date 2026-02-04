@@ -86,7 +86,12 @@ def format_packet(packet, node_store=None) -> Text:
     """Format a packet for log display. Returns Rich Text object."""
     text = Text()
 
-    timestamp = datetime.now().strftime('%H:%M:%S')
+    # Use packet's rxTime if available, otherwise fall back to now
+    rx_time = packet.get('rxTime')
+    if rx_time:
+        timestamp = datetime.fromtimestamp(rx_time).strftime('%H:%M:%S')
+    else:
+        timestamp = datetime.now().strftime('%H:%M:%S')
 
     from_id = packet.get('fromId', packet.get('from', '?'))
     to_id = packet.get('toId', packet.get('to', '?'))

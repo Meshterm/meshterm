@@ -40,8 +40,12 @@ def populated_state(in_memory_storage, sample_nodes, sample_packets):
     """Create an AppState pre-populated with sample data."""
     state = AppState(storage=in_memory_storage)
 
-    # Import sample nodes
+    # Import sample nodes (in-memory)
     state.nodes.import_nodes(sample_nodes)
+
+    # Also persist nodes to storage for database searches
+    for node_id, node_data in sample_nodes.items():
+        in_memory_storage.store_node(node_id, node_data)
 
     # Add sample packets
     for packet in sample_packets:

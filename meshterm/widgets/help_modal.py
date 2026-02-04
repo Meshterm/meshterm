@@ -71,6 +71,7 @@ HELP_CONTENT = {
     "log": {
         "title": "Log",
         "keys": [
+            ("/", "Search log"),
             ("PgUp/Dn", "Scroll"),
         ]
     },
