@@ -34,20 +34,20 @@ A terminal user interface (TUI) for monitoring and interacting with Meshtastic m
 [pipx](https://pipx.pypa.io/) installs the application in an isolated environment:
 
 ```bash
-pipx install meshterm
+pipx install git+https://github.com/Meshterm/meshterm.git
 ```
 
 ### Using pip
 
 ```bash
-pip install meshterm
+pip install git+https://github.com/Meshterm/meshterm.git
 ```
 
 ### From Source
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/Meshterm/meshterm.git
 cd meshterm
 
 # Option 1: Install with pip (editable mode for development)

@@ -50,10 +50,10 @@ dev = [
 [project.scripts]
 meshterm = "meshterm.app:main"
 
-# [project.urls]
-# Homepage = "https://github.com/YOURUSER/meshterm"
-# Repository = "https://github.com/YOURUSER/meshterm"
-# Issues = "https://github.com/YOURUSER/meshterm/issues"
+[project.urls]
+Homepage = "https://github.com/Meshterm/meshterm"
+Repository = "https://github.com/Meshterm/meshterm"
+Issues = "https://github.com/Meshterm/meshterm/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
