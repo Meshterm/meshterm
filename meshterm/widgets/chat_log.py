@@ -29,6 +29,7 @@ class ChatLog(RichLog):
     selected_index = reactive(0)
 
     HISTORY_PAGE_SIZE = 50
+    SCROLLBAR_WIDTH = 8  # Scrollbar (2) + buffer for narrow screens
 
     # Key bindings active during selection mode
     BINDINGS = [
@@ -205,21 +206,28 @@ class ChatLog(RichLog):
                 status_str = "[-]"
                 status_style = "dim"
 
-        # Calculate prefix width for indentation (use cell_len for unicode chars)
-        # Align continuation under <Name>, so: [S] + space + [HH:MM] + space
-        prefix_width = cell_len(status_str) + 1 + 7 + 1  # align under <
+        # Calculate prefix widths for wrapping (use cell_len for unicode chars)
+        # Base prefix: [S] + space + [HH:MM] + space (continuation lines align here, under <)
+        base_prefix_width = cell_len(status_str) + 1 + 7 + 1
+        # Full first-line prefix includes: < + name + > + space
+        name_extra = 1 + cell_len(sender_name) + 2
+        full_prefix_width = base_prefix_width + name_extra
 
-        # Get available width (account for borders, scrollbar, and buffer)
+        # Get available width (account for scrollbar and buffer)
         try:
-            available_width = self.size.width - 6
-            if available_width < 40:
+            available_width = self.size.width - self.SCROLLBAR_WIDTH
+            if available_width < 30:
                 available_width = 78  # fallback if too small or not sized yet
         except Exception:
             available_width = 78  # fallback
 
-        message_width = available_width - prefix_width
-        if message_width < 20:
-            message_width = available_width - 12  # at least leave room for basic prefix
+        # First line has less space (includes <name> ), continuation lines have more
+        first_line_width = available_width - full_prefix_width
+        continuation_width = available_width - base_prefix_width
+        if first_line_width < 20:
+            first_line_width = 20
+        if continuation_width < 20:
+            continuation_width = 20
 
         # Check for reply indicator
         reply_ref = self._reply_refs_cache.get(db_id) if db_id else None
@@ -228,8 +236,8 @@ class ChatLog(RichLog):
         if reply_ref:
             reply_preview = self._get_reply_preview(reply_ref)
 
-        # Wrap message text manually
-        wrapped_lines = self._wrap_text(message_text, message_width)
+        # Wrap message text (first line narrower, continuation lines wider)
+        wrapped_lines = self._wrap_text(message_text, continuation_width, first_line_width)
 
         # Build the first line with full prefix
         text = Text()
@@ -252,8 +260,8 @@ class ChatLog(RichLog):
 
         self.write(text)
 
-        # Write continuation lines with indentation
-        indent = " " * prefix_width
+        # Write continuation lines with indentation (align under <)
+        indent = " " * base_prefix_width
         for line in wrapped_lines[1:]:
             cont_text = Text()
             cont_text.append(indent)
@@ -272,7 +280,7 @@ class ChatLog(RichLog):
         # Show reactions below message
         reactions = self._reactions_cache.get(db_id, []) if db_id else []
         if reactions:
-            self._render_reactions(reactions, prefix_width)
+            self._render_reactions(reactions, base_prefix_width)
 
     def _get_reply_preview(self, reply_ref: dict) -> str:
         """Get a preview string for a reply's parent message."""
@@ -321,46 +329,61 @@ class ChatLog(RichLog):
 
         self.write(react_text)
 
-    def _wrap_text(self, text: str, width: int) -> list:
+    def _wrap_text(self, text: str, width: int, first_line_width: int = None) -> list:
         """Wrap text to specified width, preserving words where possible.
 
         Uses cell_len for proper unicode/emoji width handling.
+
+        Args:
+            text: The text to wrap.
+            width: Width for continuation lines.
+            first_line_width: Width for the first line (defaults to width).
         """
         if width <= 0:
             return [text]
+
+        if first_line_width is None:
+            first_line_width = width
 
         words = text.split(' ')
         lines = []
         current_line = []
         current_len = 0
 
+        def get_current_width():
+            """Get width for current line (first line may be narrower)."""
+            return first_line_width if len(lines) == 0 else width
+
         for word in words:
             word_len = cell_len(word)
+            current_width = get_current_width()
 
-            # If word itself is longer than width, force break it
-            if word_len > width:
+            # If word itself is longer than current width, force break it
+            if word_len > current_width:
                 # Flush current line first
                 if current_line:
                     lines.append(' '.join(current_line))
                     current_line = []
                     current_len = 0
+                    current_width = get_current_width()
 
                 # Break long word into chunks (by characters, checking cell width)
                 chunk = ""
                 chunk_len = 0
                 for char in word:
                     char_len = cell_len(char)
-                    if chunk_len + char_len > width:
+                    if chunk_len + char_len > current_width:
                         lines.append(chunk)
                         chunk = char
                         chunk_len = char_len
+                        current_width = get_current_width()
                     else:
                         chunk += char
                         chunk_len += char_len
                 if chunk:
                     current_line = [chunk]
                     current_len = chunk_len
-            elif current_len + (1 if current_line else 0) + word_len <= width:
+            elif current_len + (1 if current_line else 0) + word_len <= current_width:
                 # Word fits on current line
                 current_line.append(word)
                 current_len += (1 if len(current_line) > 1 else 0) + word_len
@@ -653,21 +676,30 @@ class ChatLog(RichLog):
             num_str = ""
             num_width = 0
 
-        prefix_width = cell_len(status_str) + 1 + 7 + 1
+        # Calculate prefix widths for wrapping
+        # Base prefix: [num] + space (if selection) + [S] + space + [HH:MM] + space
+        base_prefix_width = cell_len(status_str) + 1 + 7 + 1
         if self.selection_active:
-            prefix_width += num_width + 1
+            base_prefix_width += num_width + 1
+        # Full first-line prefix includes: < + name + > + space
+        name_extra = 1 + cell_len(sender_name) + 2
+        full_prefix_width = base_prefix_width + name_extra
 
         # Get available width
         try:
-            available_width = self.size.width - 6
-            if available_width < 40:
+            available_width = self.size.width - self.SCROLLBAR_WIDTH
+            if available_width < 30:
                 available_width = 78
         except Exception:
             available_width = 78
 
-        message_width = available_width - prefix_width
-        if message_width < 20:
-            message_width = available_width - 12
+        # First line has less space (includes <name> ), continuation lines have more
+        first_line_width = available_width - full_prefix_width
+        continuation_width = available_width - base_prefix_width
+        if first_line_width < 20:
+            first_line_width = 20
+        if continuation_width < 20:
+            continuation_width = 20
 
         # Check for reply indicator
         reply_ref = self._reply_refs_cache.get(db_id) if db_id else None
@@ -699,8 +731,8 @@ class ChatLog(RichLog):
             text.append(reply_preview, style="dim italic")
             text.append(" ")
 
-        # Wrap message text
-        wrapped_lines = self._wrap_text(message_text, message_width)
+        # Wrap message text (first line narrower, continuation lines wider)
+        wrapped_lines = self._wrap_text(message_text, continuation_width, first_line_width)
         line_style = "reverse" if is_selected else Colors.TEXT
 
         # First line of message on same line as header
@@ -709,8 +741,8 @@ class ChatLog(RichLog):
 
         self.write(text)
 
-        # Write continuation lines with indentation
-        indent = " " * prefix_width
+        # Write continuation lines with indentation (align under <)
+        indent = " " * base_prefix_width
         for line in wrapped_lines[1:]:
             msg_text = Text()
             msg_text.append(indent)
@@ -729,7 +761,7 @@ class ChatLog(RichLog):
         # Show reactions
         reactions = self._reactions_cache.get(db_id, []) if db_id else []
         if reactions:
-            self._render_reactions(reactions, prefix_width)
+            self._render_reactions(reactions, base_prefix_width)
 
     def action_select_next(self):
         """Select the next (newer) message."""
