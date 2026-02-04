@@ -79,6 +79,21 @@ REBROADCAST_MODE_OPTIONS = [
     ("KNOWN_ONLY", 3),
 ]
 
+# Interval options for broadcast settings (human-readable)
+INTERVAL_OPTIONS = [
+    ("Disabled", 0),
+    ("15 minutes", 900),
+    ("30 minutes", 1800),
+    ("1 hour", 3600),
+    ("3 hours", 10800),
+    ("6 hours", 21600),
+    ("12 hours", 43200),
+    ("24 hours", 86400),
+]
+
+# For settings where 0 means "use default" rather than disabled
+INTERVAL_OPTIONS_WITH_DEFAULT = [("Default", 0)] + INTERVAL_OPTIONS[1:]
+
 # Channel role options
 CHANNEL_ROLE_OPTIONS = [
     ("DISABLED", 0),
@@ -476,14 +491,14 @@ class PositionPanel(ConfigPanel):
                 allow_blank=False,
             )
 
-        # Position broadcast interval
+        # Position broadcast interval (dropdown)
         with Horizontal(classes="form-row"):
-            yield Label("Broadcast Secs:", classes="form-label")
-            yield Input(
-                placeholder="Seconds (0=disable)",
-                id="pos-broadcast-input",
+            yield Label("Position Interval:", classes="form-label")
+            yield Select(
+                [(name, val) for name, val in INTERVAL_OPTIONS],
+                id="pos-broadcast-select",
                 classes="form-input",
-                type="integer",
+                allow_blank=False,
             )
 
         # Fixed position
@@ -555,6 +570,14 @@ class PositionPanel(ConfigPanel):
         except Exception:
             pass
 
+    def _find_nearest_interval(self, seconds: int, options: list) -> int:
+        """Find the nearest interval option for a given seconds value."""
+        if seconds == 0:
+            return 0
+        # Find the closest option
+        closest = min(options, key=lambda x: abs(x[1] - seconds) if x[1] > 0 else float('inf'))
+        return closest[1]
+
     def load_config(self, config: dict):
         """Load position configuration."""
         pos = config.get('position', {})
@@ -567,8 +590,10 @@ class PositionPanel(ConfigPanel):
             gps_mode = pos.get('gps_mode', 0)
             self.query_one("#gps-mode-select", Select).value = gps_mode
 
+            # Position broadcast interval (map to nearest dropdown option)
             broadcast_secs = pos.get('position_broadcast_secs', 0)
-            self.query_one("#pos-broadcast-input", Input).value = str(broadcast_secs)
+            nearest_broadcast = self._find_nearest_interval(broadcast_secs, INTERVAL_OPTIONS)
+            self.query_one("#pos-broadcast-select", Select).value = nearest_broadcast
 
             fixed_pos = pos.get('fixed_position', False)
             self.query_one("#fixed-pos-switch", Switch).value = fixed_pos
@@ -594,10 +619,7 @@ class PositionPanel(ConfigPanel):
 
         try:
             values['gps_mode'] = self.query_one("#gps-mode-select", Select).value
-
-            broadcast_str = self.query_one("#pos-broadcast-input", Input).value
-            values['position_broadcast_secs'] = int(broadcast_str) if broadcast_str else 0
-
+            values['position_broadcast_secs'] = self.query_one("#pos-broadcast-select", Select).value
             values['fixed_position'] = self.query_one("#fixed-pos-switch", Switch).value
 
         except Exception:
@@ -667,6 +689,15 @@ class PositionPanel(ConfigPanel):
 class DevicePanel(ConfigPanel):
     """Panel for device role settings."""
 
+    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DevicePanel .section-header {
+        margin-top: 1;
+        margin-bottom: 1;
+        text-style: bold;
+        color: $text;
+    }
+    """
+
     def compose(self) -> ComposeResult:
         # Long name
         with Horizontal(classes="form-row"):
@@ -707,14 +738,27 @@ class DevicePanel(ConfigPanel):
                 allow_blank=False,
             )
 
-        # Node info broadcast interval
+        # Node info broadcast interval (dropdown)
         with Horizontal(classes="form-row"):
-            yield Label("NodeInfo Secs:", classes="form-label")
-            yield Input(
-                placeholder="Seconds (0=default)",
-                id="nodeinfo-broadcast-input",
+            yield Label("NodeInfo Interval:", classes="form-label")
+            yield Select(
+                [(name, val) for name, val in INTERVAL_OPTIONS_WITH_DEFAULT],
+                id="nodeinfo-broadcast-select",
                 classes="form-input",
-                type="integer",
+                allow_blank=False,
+            )
+
+        # Telemetry Settings section
+        yield Static("Telemetry Settings", classes="section-header")
+
+        # Device telemetry interval
+        with Horizontal(classes="form-row"):
+            yield Label("Device Telemetry:", classes="form-label")
+            yield Select(
+                [(name, val) for name, val in INTERVAL_OPTIONS],
+                id="telemetry-interval-select",
+                classes="form-input",
+                allow_blank=False,
             )
 
         # Buttons
@@ -722,14 +766,24 @@ class DevicePanel(ConfigPanel):
             yield Button("Save", variant="primary", id="save-btn", classes="save-button")
             yield Button("Revert", variant="default", id="revert-btn")
 
+    def _find_nearest_interval(self, seconds: int, options: list) -> int:
+        """Find the nearest interval option for a given seconds value."""
+        if seconds == 0:
+            return 0
+        # Find the closest option
+        closest = min(options, key=lambda x: abs(x[1] - seconds) if x[1] > 0 else float('inf'))
+        return closest[1]
+
     def load_config(self, config: dict):
         """Load device configuration."""
         dev = config.get('device', {})
         user = config.get('user', {})
+        telemetry = config.get('telemetry', {})
 
         self._original_values = {
             'device': dev.copy() if dev else {},
             'user': user.copy() if user else {},
+            'telemetry': telemetry.copy() if telemetry else {},
         }
 
         try:
@@ -747,15 +801,22 @@ class DevicePanel(ConfigPanel):
             rebroadcast = dev.get('rebroadcast_mode', 0)
             self.query_one("#rebroadcast-mode-select", Select).value = rebroadcast
 
+            # NodeInfo interval (map to nearest dropdown option)
             nodeinfo_secs = dev.get('node_info_broadcast_secs', 0)
-            self.query_one("#nodeinfo-broadcast-input", Input).value = str(nodeinfo_secs)
+            nearest_nodeinfo = self._find_nearest_interval(nodeinfo_secs, INTERVAL_OPTIONS_WITH_DEFAULT)
+            self.query_one("#nodeinfo-broadcast-select", Select).value = nearest_nodeinfo
+
+            # Telemetry interval
+            telemetry_secs = telemetry.get('device_update_interval', 0)
+            nearest_telemetry = self._find_nearest_interval(telemetry_secs, INTERVAL_OPTIONS)
+            self.query_one("#telemetry-interval-select", Select).value = nearest_telemetry
 
         except Exception:
             pass
 
     def _get_form_values(self) -> dict:
         """Get current form values."""
-        values = {'device': {}, 'user': {}}
+        values = {'device': {}, 'user': {}, 'telemetry': {}}
 
         try:
             # User/owner names
@@ -765,9 +826,10 @@ class DevicePanel(ConfigPanel):
             # Device settings
             values['device']['role'] = self.query_one("#device-role-select", Select).value
             values['device']['rebroadcast_mode'] = self.query_one("#rebroadcast-mode-select", Select).value
+            values['device']['node_info_broadcast_secs'] = self.query_one("#nodeinfo-broadcast-select", Select).value
 
-            nodeinfo_str = self.query_one("#nodeinfo-broadcast-input", Input).value
-            values['device']['node_info_broadcast_secs'] = int(nodeinfo_str) if nodeinfo_str else 0
+            # Telemetry settings
+            values['telemetry']['device_update_interval'] = self.query_one("#telemetry-interval-select", Select).value
 
         except Exception:
             pass
@@ -782,7 +844,7 @@ class DevicePanel(ConfigPanel):
             self._revert_config()
 
     def _save_config(self):
-        """Save device config and owner names."""
+        """Save device config, telemetry config, and owner names."""
         values = self._get_form_values()
 
         # Check if device config will cause reboot
@@ -791,6 +853,10 @@ class DevicePanel(ConfigPanel):
 
         # Save device config
         device_success = self.connection.write_config('device', device_values)
+
+        # Save telemetry module config
+        telemetry_values = values.get('telemetry', {})
+        telemetry_success = self.connection.write_module_config('telemetry', telemetry_values)
 
         # Save owner names if provided
         user_values = values.get('user', {})
@@ -804,7 +870,7 @@ class DevicePanel(ConfigPanel):
                 short_name=short_name if short_name else None
             )
 
-        success = device_success and owner_success
+        success = device_success and owner_success and telemetry_success
         self.post_message(self.ConfigSaved('device', success, will_reboot))
 
     def _revert_config(self):
@@ -813,6 +879,7 @@ class DevicePanel(ConfigPanel):
             self.load_config({
                 'device': self._original_values.get('device', {}),
                 'user': self._original_values.get('user', {}),
+                'telemetry': self._original_values.get('telemetry', {}),
             })
 
 

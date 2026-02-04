@@ -429,6 +429,13 @@ class MeshtasticConnection:
                     'node_info_broadcast_secs': dev.node_info_broadcast_secs,
                 }
 
+            # Telemetry module config
+            if node.moduleConfig and hasattr(node.moduleConfig, 'telemetry'):
+                telem = node.moduleConfig.telemetry
+                config['telemetry'] = {
+                    'device_update_interval': telem.device_update_interval,
+                }
+
             # User/owner info (short name, long name)
             if self.state.my_node_id:
                 my_node = self.state.nodes.get_node(self.state.my_node_id)
@@ -521,6 +528,34 @@ class MeshtasticConnection:
                     setattr(node.localConfig.device, key, value)
                 node.writeConfig('device')
 
+            else:
+                return False
+
+            return True
+
+        except Exception:
+            return False
+
+    def write_module_config(self, config_type: str, values: dict) -> bool:
+        """Write module configuration to device.
+
+        Args:
+            config_type: Module config type (e.g., 'telemetry')
+            values: Dict of config values to set
+
+        Returns:
+            True if successful
+        """
+        if not self.interface or not self.interface.localNode:
+            return False
+
+        try:
+            node = self.interface.localNode
+
+            if config_type == 'telemetry':
+                for key, value in values.items():
+                    setattr(node.moduleConfig.telemetry, key, value)
+                node.writeConfig('telemetry')
             else:
                 return False
 
