@@ -55,6 +55,7 @@ class NodesView(Container):
         Binding("<", "prev_sort_column", "Sort ←", show=False),
         Binding(">", "next_sort_column", "Sort →", show=False),
         Binding("r", "toggle_sort_direction", "Reverse", show=False, priority=True),
+        Binding("o", "toggle_online", "Online", show=False),
     ]
 
     class NodeSelected(Message):
@@ -73,7 +74,7 @@ class NodesView(Container):
         with Container(classes="search-bar"):
             yield Input(placeholder="Search nodes...", id="search-input", disabled=True)
         yield NodeTable(self.state, id="node-table")
-        yield Static("Enter=details  /=search  f=favorite  i=invite  </>=sort  r=reverse  Esc=back", classes="nodes-footer")
+        yield Static("Enter=details  /=search  f=favorite  i=invite  o=online  </>=sort  r=reverse  Esc=back", classes="nodes-footer")
 
     def action_start_search(self):
         """Activate search mode."""
@@ -258,6 +259,15 @@ class NodesView(Container):
 
         # Show channel selection dialog
         self.app.push_screen(ChannelSelectDialog(channels), on_channel_selected)
+
+    def action_toggle_online(self):
+        """Toggle online-only filter."""
+        table = self.query_one("#node-table", NodeTable)
+        table.toggle_online_filter()
+        if table._online_only:
+            self.app.notify("Showing online nodes only", timeout=2)
+        else:
+            self.app.notify("Showing all nodes", timeout=2)
 
     def action_prev_sort_column(self):
         """Sort by previous column."""

@@ -43,8 +43,7 @@ HELP_CONTENT = {
         "keys": [
             ("0-7", "Switch channel"),
             ("<- / ->", "Prev/next channel"),
-            ("^r", "React to message"),
-            ("^e", "Reply to message"),
+            ("^r", "Select message (actions)"),
             ("^j", "Channel manager"),
             ("x", "Close DM"),
             ("PgUp/Dn", "Scroll history"),

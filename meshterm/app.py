@@ -445,6 +445,16 @@ class MeshtermApp(App):
             # Track pending message for ACK
             if request_id:
                 self.state.messages.add_pending(request_id, tx_packet, packet_id=request_id)
+
+            # Lock input until delivery confirmed
+            if self.current_view == "chat":
+                try:
+                    from .views.chat import ChatView
+                    chat_view = self.query_one("#chat-view", ChatView)
+                    chat_input_widget = chat_view.query_one("#chat-input", ChatInput)
+                    chat_input_widget.lock_input()
+                except Exception:
+                    pass
         else:
             if dest_name:
                 self.notify("Failed to send DM", severity="error", timeout=3)

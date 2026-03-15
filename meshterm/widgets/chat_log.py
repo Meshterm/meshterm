@@ -25,11 +25,14 @@ class ChatLog(RichLog):
 
     # Selection mode state
     selection_active = reactive(False)
-    selection_mode = reactive("")  # "react" or "reply"
+    selection_mode = reactive("")  # "select", "react", or "reply"
     selected_index = reactive(0)
 
     HISTORY_PAGE_SIZE = 50
     SCROLLBAR_WIDTH = 8  # Scrollbar (2) + buffer for narrow screens
+
+    # Spinner frames for pending message animation
+    PENDING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     # Key bindings active during selection mode
     BINDINGS = [
@@ -72,6 +75,11 @@ class ChatLog(RichLog):
         self._reply_refs_cache: Dict[int, dict] = {}  # db_id -> reply ref info
         self.can_focus = False  # Only focusable during selection mode
 
+        # Pending message spinner state
+        self._pending_spinner_frame = 0
+        self._pending_spinner_timer = None
+        self._has_pending_messages = False
+
         # Subscribe to message updates
         self.state.messages.subscribe(self._handle_packet_event)
 
@@ -90,6 +98,7 @@ class ChatLog(RichLog):
             # Only handle TEXT_MESSAGE_APP
             if portnum in ('TEXT_MESSAGE_APP', '1'):
                 packet_channel = packet.get('channel', 0)
+                rendered = False
 
                 if self.dm_node_id:
                     # DM mode: only show messages to/from the DM node on channel 0
@@ -100,6 +109,7 @@ class ChatLog(RichLog):
                     dm_node_id = format_node_id(self.dm_node_id)
                     if from_id == dm_node_id or to_id == dm_node_id:
                         self._render_message(data)
+                        rendered = True
                 else:
                     # Broadcast mode: show messages on the current channel
                     if packet_channel == self.channel:
@@ -109,6 +119,12 @@ class ChatLog(RichLog):
                             if to_id not in ('^all', '!ffffffff'):
                                 return  # Skip DMs on channel 0
                         self._render_message(data)
+                        rendered = True
+
+                # Start spinner if this is a pending TX message
+                if rendered and packet.get('_tx') and packet.get('_delivered') is None:
+                    self._has_pending_messages = True
+                    self._start_pending_animation()
         elif event_type == "delivery_updated" and data:
             # Refresh the entire log to update the delivery indicator
             # (RichLog doesn't support updating individual lines)
@@ -126,6 +142,8 @@ class ChatLog(RichLog):
                             self.load_messages()
                 elif packet_channel == self.channel:
                     self.load_messages()
+                # Check if any pending messages remain
+                self._has_pending_messages = self._check_pending_messages()
         elif event_type == "reaction_updated" and data:
             # Refresh to show updated reactions
             self.load_messages()
@@ -184,27 +202,7 @@ class ChatLog(RichLog):
         # Format: [S] [HH:MM] <Name> message
         # S = status (1 char) or hop count (1 digit usually)
 
-        if is_tx:
-            delivered = packet.get('_delivered')
-            if delivered is None:
-                status_str = "[…]"
-                status_style = "dim"
-            elif delivered:
-                status_str = "[✓]"
-                status_style = "bright_green"
-            else:
-                status_str = "[✗]"
-                status_style = "bright_red"
-        else:
-            hop_start = packet.get('hopStart')
-            hop_limit = packet.get('hopLimit')
-            if hop_start is not None and hop_limit is not None:
-                hops = hop_start - hop_limit
-                status_str = f"[{hops}]"
-                status_style = "bright_cyan"
-            else:
-                status_str = "[-]"
-                status_style = "dim"
+        status_str, status_style = self._get_status_indicator(packet, is_tx)
 
         # Calculate prefix widths for wrapping (use cell_len for unicode chars)
         # Base prefix: [S] + space + [HH:MM] + space (continuation lines align here, under <)
@@ -553,8 +551,62 @@ class ChatLog(RichLog):
         self.dm_node_id = node_id
         self.load_messages()
 
+    def _get_status_indicator(self, packet: dict, is_tx: bool) -> tuple:
+        """Get status string and style for a message."""
+        if is_tx:
+            delivered = packet.get('_delivered')
+            if delivered is None:
+                frame = self.PENDING_FRAMES[self._pending_spinner_frame % len(self.PENDING_FRAMES)]
+                return f"[{frame}]", "bright_yellow"
+            elif delivered:
+                return "[✓]", "bright_green"
+            else:
+                return "[✗]", "bright_red"
+        else:
+            hop_start = packet.get('hopStart')
+            hop_limit = packet.get('hopLimit')
+            if hop_start is not None and hop_limit is not None:
+                hops = hop_start - hop_limit
+                return f"[{hops}]", "bright_cyan"
+            else:
+                return "[-]", "dim"
+
+    def _check_pending_messages(self) -> bool:
+        """Check if any displayed messages are still pending delivery."""
+        for entry in self._displayed_entries:
+            packet = entry.get('packet', {})
+            if packet.get('_tx') and packet.get('_delivered') is None:
+                return True
+        return False
+
+    def _start_pending_animation(self):
+        """Start the spinner timer if not already running."""
+        if self._pending_spinner_timer is None:
+            self._pending_spinner_timer = self.set_interval(0.3, self._advance_pending_spinner)
+
+    def _stop_pending_animation(self):
+        """Stop the spinner timer."""
+        if self._pending_spinner_timer is not None:
+            self._pending_spinner_timer.stop()
+            self._pending_spinner_timer = None
+
+    def _advance_pending_spinner(self):
+        """Advance spinner frame and re-render if there are pending messages."""
+        if not self._has_pending_messages:
+            self._stop_pending_animation()
+            return
+        self._pending_spinner_frame = (self._pending_spinner_frame + 1) % len(self.PENDING_FRAMES)
+        self._rerender_messages()
+
+    def _rerender_messages(self):
+        """Re-render all displayed messages from cached entries (no DB reload)."""
+        self.clear()
+        for entry in self._displayed_entries:
+            self._render_message(entry, track=False)
+
     def on_unmount(self):
-        """Cleanup subscriptions."""
+        """Cleanup subscriptions and timers."""
+        self._stop_pending_animation()
         self.state.messages.unsubscribe(self._handle_packet_event)
 
     # Selection mode methods
@@ -583,34 +635,33 @@ class ChatLog(RichLog):
         self.can_focus = False
         self.load_messages()  # Re-render without selection highlighting
 
-    def _refresh_with_selection(self, scroll_to_selected: bool = True):
+    def _refresh_with_selection(self):
         """Re-render messages with selection highlighting."""
         self.clear()
+        line_offsets = []
+        total_lines = 0
+
         for i, entry in enumerate(self._displayed_entries):
-            self._render_message_with_index(entry, i, track=False)
+            line_offsets.append(total_lines)
+            total_lines += self._render_message_with_index(entry, i, track=False)
 
-        if scroll_to_selected:
-            # Scroll to show selected message
-            # Estimate ~2 lines per message (header + content, sometimes reactions)
-            lines_per_msg = 2
-            approx_line = self.selected_index * lines_per_msg
+        if self.selected_index < len(line_offsets):
+            target = line_offsets[self.selected_index]
+            self.call_after_refresh(self._scroll_to_line, target)
 
-            # Get visible height
-            try:
-                visible_height = self.size.height - 2  # Account for borders
-            except Exception:
-                visible_height = 20
+    def _scroll_to_line(self, target: int):
+        """Scroll so that the target line is visible."""
+        visible = max(self.size.height - 2, 5)
+        if target < self.scroll_y:
+            self.scroll_y = max(0, target - 1)
+        elif target >= self.scroll_y + visible:
+            self.scroll_y = target - visible + 2
 
-            # Keep selected item in view with some context
-            if approx_line < self.scroll_y:
-                # Selected is above visible area - scroll up
-                self.scroll_y = max(0, approx_line - 2)
-            elif approx_line >= self.scroll_y + visible_height:
-                # Selected is below visible area - scroll down
-                self.scroll_y = approx_line - visible_height + 4
+    def _render_message_with_index(self, entry: dict, index: int, track: bool = False) -> int:
+        """Render a message with index number and optional selection highlight.
 
-    def _render_message_with_index(self, entry: dict, index: int, track: bool = False):
-        """Render a message with index number and optional selection highlight."""
+        Returns the number of lines written.
+        """
         packet = entry['packet']
         timestamp = entry.get('timestamp', datetime.now().timestamp())
         time_str = datetime.fromtimestamp(timestamp).strftime('%H:%M')
@@ -620,7 +671,7 @@ class ChatLog(RichLog):
         message_text = decoded.get('text', '')
 
         if not message_text:
-            return
+            return 0
 
         is_selected = self.selection_active and index == self.selected_index
         is_tx = packet.get('_tx', False)
@@ -645,27 +696,7 @@ class ChatLog(RichLog):
             name_style = "bold bright_cyan"
 
         # Build prefix parts
-        if is_tx:
-            delivered = packet.get('_delivered')
-            if delivered is None:
-                status_str = "[…]"
-                status_style = "dim"
-            elif delivered:
-                status_str = "[✓]"
-                status_style = "bright_green"
-            else:
-                status_str = "[✗]"
-                status_style = "bright_red"
-        else:
-            hop_start = packet.get('hopStart')
-            hop_limit = packet.get('hopLimit')
-            if hop_start is not None and hop_limit is not None:
-                hops = hop_start - hop_limit
-                status_str = f"[{hops}]"
-                status_style = "bright_cyan"
-            else:
-                status_str = "[-]"
-                status_style = "dim"
+        status_str, status_style = self._get_status_indicator(packet, is_tx)
 
         # In selection mode, show line numbers
         display_num = index + 1
@@ -740,6 +771,7 @@ class ChatLog(RichLog):
             text.append(wrapped_lines[0], style=line_style)
 
         self.write(text)
+        lines_written = 1
 
         # Write continuation lines with indentation (align under <)
         indent = " " * base_prefix_width
@@ -748,6 +780,7 @@ class ChatLog(RichLog):
             msg_text.append(indent)
             msg_text.append(line, style=line_style)
             self.write(msg_text)
+            lines_written += 1
 
         # Show error reason
         if is_tx and packet.get('_delivered') is False:
@@ -757,11 +790,15 @@ class ChatLog(RichLog):
                 error_text.append(indent)
                 error_text.append(f"Error: {error_reason}", style="dim bright_red")
                 self.write(error_text)
+                lines_written += 1
 
         # Show reactions
         reactions = self._reactions_cache.get(db_id, []) if db_id else []
         if reactions:
             self._render_reactions(reactions, base_prefix_width)
+            lines_written += 1
+
+        return lines_written
 
     def action_select_next(self):
         """Select the next (newer) message."""

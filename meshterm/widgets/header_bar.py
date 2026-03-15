@@ -287,20 +287,23 @@ class HeaderBar(Static):
                 text.append(suffix, style=Colors.DIM)
             text.append(" ")
 
-        # Calculate padding to push help hint to the right edge
-        hint = "[^h]"
+        # Calculate padding to push hints to the right edge
+        context_hint = "[^r]" if self.context == "chat" else ""
+        hints = context_hint + "[^h]"
         try:
             available_width = self.size.width
             current_len = cell_len(text.plain)
-            padding = available_width - current_len - len(hint)
+            padding = available_width - current_len - len(hints)
             if padding > 0:
                 text.append(" " * padding)
         except Exception:
             # Fallback if size not available yet
             text.append(" " * 30)
 
-        # Help hint on the right
-        text.append(hint, style=Colors.DIM)
+        # Hints on the right
+        if context_hint:
+            text.append(context_hint, style=Colors.DIM)
+        text.append("[^h]", style=Colors.DIM)
 
         return text
 

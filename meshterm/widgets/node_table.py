@@ -68,7 +68,7 @@ class NodeTable(DataTable):
         "short": lambda n, t, my_pos: str(n.get('user', {}).get('shortName') or '').lower(),
         "hardware": lambda n, t, my_pos: str(n.get('user', {}).get('hwModel') or '').lower(),
         "dist": lambda n, t, my_pos: NodeTable._calc_distance(n, my_pos),
-        "hops": lambda n, t, my_pos: n.get('hops') or n.get('hopsAway') or 999,
+        "hops": lambda n, t, my_pos: n.get('hops') if n.get('hops') is not None else (n.get('hopsAway') if n.get('hopsAway') is not None else 999),
         "snr": lambda n, t, my_pos: n.get('snr') if n.get('snr') is not None else -999,
         "rssi": lambda n, t, my_pos: n.get('rssi') if n.get('rssi') is not None else -999,
         "bat": lambda n, t, my_pos: n.get('deviceMetrics', {}).get('batteryLevel', -1),
@@ -92,6 +92,7 @@ class NodeTable(DataTable):
         self.zebra_stripes = True
         self.can_focus = True
         self._filter = ""
+        self._online_only = False
         self._sort_column_idx = 0  # Index into COLUMNS, default "On?"
         self._sort_ascending = False  # Default descending (online/recent first)
 
@@ -154,8 +155,18 @@ class NodeTable(DataTable):
             else:
                 col.label = Text(name)
 
+    def toggle_online_filter(self):
+        """Toggle online-only filter and refresh."""
+        self._online_only = not self._online_only
+        self._refresh_all()
+
     def _matches_filter(self, node_id: str, node: dict) -> bool:
-        """Check if a node matches the current filter."""
+        """Check if a node matches the current filters."""
+        if self._online_only:
+            last_heard = node.get('lastHeard', 0) or 0
+            if int(time.time()) - last_heard >= self.ONLINE_THRESHOLD:
+                return False
+
         if not self._filter:
             return True
 

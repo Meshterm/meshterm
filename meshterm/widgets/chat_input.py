@@ -43,7 +43,7 @@ class ChatInput(Vertical):
     ChatInput .channel-indicator {
         width: auto;
         min-width: 6;
-        max-width: 18;
+        max-width: 32;
         padding: 0;
     }
 
@@ -69,6 +69,10 @@ class ChatInput(Vertical):
     reply_to_entry = reactive(None)  # Entry being replied to
     reply_to_name = reactive("")  # Sender name of message being replied to
 
+    # Send lock state
+    send_locked = reactive(False)
+    lock_reason = reactive("")
+
     class MessageSubmitted(Message):
         """Posted when a message is submitted."""
 
@@ -92,6 +96,7 @@ class ChatInput(Vertical):
     def __init__(self, state: AppState, **kwargs):
         super().__init__(**kwargs)
         self.state = state
+        self._lock_timeout_timer = None
 
     def compose(self) -> ComposeResult:
         yield Static(self._format_reply_context(), classes="reply-context", id="reply-context")
@@ -113,6 +118,9 @@ class ChatInput(Vertical):
             text.append("Ch:", style=Colors.DIM)
             text.append(f"[{self.channel}]", style="bold bright_green")
         text.append(">", style=Colors.DIM)
+        if self.send_locked:
+            text.append(" ", style=Colors.DIM)
+            text.append(self.lock_reason or "Sending...", style="dim bright_yellow italic")
         return text
 
     def _format_reply_context(self) -> Text:
@@ -149,12 +157,51 @@ class ChatInput(Vertical):
         else:
             context.remove_class("visible")
 
+    def lock_input(self, reason: str = "Awaiting delivery...", timeout_seconds: float = 30.0):
+        """Lock input until message delivery is confirmed."""
+        self.send_locked = True
+        self.lock_reason = reason
+        try:
+            input_field = self.query_one("#chat-input-field", Input)
+            input_field.disabled = True
+        except Exception:
+            pass
+        self._update_channel_display()
+
+        if self._lock_timeout_timer:
+            self._lock_timeout_timer.stop()
+        self._lock_timeout_timer = self.set_timer(timeout_seconds, self._on_lock_timeout)
+
+    def unlock_input(self):
+        """Unlock input after delivery confirmation or timeout."""
+        if not self.send_locked:
+            return
+        self.send_locked = False
+        self.lock_reason = ""
+        try:
+            input_field = self.query_one("#chat-input-field", Input)
+            input_field.disabled = False
+            input_field.focus()
+        except Exception:
+            pass
+        self._update_channel_display()
+
+        if self._lock_timeout_timer:
+            self._lock_timeout_timer.stop()
+            self._lock_timeout_timer = None
+
+    def _on_lock_timeout(self):
+        """Safety timeout - unlock input if ACK never arrives."""
+        self.unlock_input()
+        self.app.notify("Send timeout - input unlocked", severity="warning", timeout=3)
+
     def set_channel(self, channel: int):
         """Set the channel (broadcast mode)."""
         self.dm_node_id = None
         self.dm_node_name = ""
         self.channel = channel
         self.clear_reply_mode()  # Clear reply when switching channels
+        self.unlock_input()  # Unlock when switching channels
         self._update_channel_display()
 
     def set_dm_mode(self, node_id: str, node_name: str = ""):
@@ -162,6 +209,7 @@ class ChatInput(Vertical):
         self.dm_node_id = node_id
         self.dm_node_name = node_name
         self.clear_reply_mode()  # Clear reply when switching DMs
+        self.unlock_input()  # Unlock when switching DMs
         self._update_channel_display()
 
     def set_reply_mode(self, entry: dict, sender_name: str = ""):
@@ -213,6 +261,9 @@ class ChatInput(Vertical):
     def on_input_submitted(self, event: Input.Submitted):
         """Handle Enter key in input."""
         if event.input.id == "chat-input-field":
+            if self.send_locked:
+                self.app.bell()
+                return
             text = event.input.value.strip()
             if text:
                 # Get reply-to packet ID if in reply mode
