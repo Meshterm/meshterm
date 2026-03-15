@@ -5,6 +5,12 @@ A terminal user interface (TUI) for monitoring and interacting with Meshtastic m
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
+## Screenshots
+
+![Nodes view](screenshots/nodes.svg)
+
+![Chat view](screenshots/chat.svg)
+
 ## Features
 
 - **Real-time packet monitoring** - Stream all mesh traffic with color-coded packet types
@@ -80,19 +86,7 @@ bin/run [port]
 
 Table of all discovered nodes with key metrics. Supports searching, sorting, and quick actions.
 
-```
-+---------------------------------------------------------------------------+
-| [N]odes [C]hat [L]og [S]ettings                                      [^h] |
-+---------------------------------------------------------------------------+
-| On? | Name          | Short | Location | Dist  | SNR  | Batt | PKI | Fav  |
-|-----+---------------+-------+----------+-------+------+------+-----+------|
-| * * | My Radio      | ME    | 95051    |       |      |  95% |  *  |      |
-|   * | Bob's Node    | BOB   | San Jose | 2.3km |  8.5 |  72% |  *  |  *   |
-|   * | Alice Mobile  | ALI   | Palo Alto| 5.1km |  4.2 |  45% |  *  |      |
-|   o | Remote Site   | REM   |          | 12km  | -2.1 |  88% |     |      |
-+---------------------------------------------------------------------------+
- Enter=details  /=search  f=favorite  i=invite  </>=sort  r=reverse
-```
+![Nodes view](screenshots/nodes.svg)
 
 **Features:**
 - **Search** (`/`) - Filter nodes by name, ID, or location
@@ -105,32 +99,13 @@ Table of all discovered nodes with key metrics. Supports searching, sorting, and
 
 Real-time stream of all packets in the mesh network.
 
-```
-+---------------------------------------------------------------------------+
-| 14:32:15 TEXT      !a1b2c3d4 -> ^all    Hello everyone!                   |
-| 14:32:18 POSITION  !e5f6a7b8 -> ^all                                      |
-| 14:32:21 TELEMETRY !a1b2c3d4 -> ^all    Batt: 85% Ch: 12.3%               |
-| 14:32:25 NODEINFO  !c9d0e1f2 -> ^all    Bob's Radio                       |
-+---------------------------------------------------------------------------+
-```
+![Log view](screenshots/log.svg)
 
 ### Chat View (C)
 
 IRC-style chat interface with channel tabs and direct messaging.
 
-```
-+---------------------------------------------------------------------------+
-| [0:Primary] [1:Local] [@Bob] [@Alice(2)]                             [^h] |
-+---------------------------------------------------------------------------+
-| [0] [14:30] <Bob> Hello everyone!                                         |
-| [1] [14:31] <You> Hi Bob!                                                 |
-|     [checkmark] Delivered                                                 |
-| [0] [14:32] <Alice> Hey all                                               |
-|     thumbsup x2  heart                                                    |
-+---------------------------------------------------------------------------+
-| Ch:[0]> Type message...                                                   |
-+---------------------------------------------------------------------------+
-```
+![Chat view](screenshots/chat.svg)
 
 **Features:**
 - **Channels** (`0-7`) - Switch between broadcast channels
@@ -143,31 +118,7 @@ IRC-style chat interface with channel tabs and direct messaging.
 
 ### Detail View (D)
 
-Comprehensive information about a selected node with DM capability.
-
-```
-+--------------------------+------------------------------------------------+
-| Node: Bob's Node         | [14:30] <Bob> Position update sent             |
-| Short: BOB               | [14:31] <You> Got it, thanks!                  |
-| ID: !a1b2c3d4            | [14:32] <Bob> Heading north now                |
-| Hardware: TBEAM          |                                                |
-| Seen: 2m ago             |                                                |
-|                          |                                                |
-| Security:                |                                                |
-|   PKI: Encrypted         |                                                |
-|                          |                                                |
-| Telemetry:               |                                                |
-|   Battery: 72%           |                                                |
-|   Voltage: 3.85V         |                                                |
-|   Channel Util: 15.2%    |                                                |
-|                          |                                                |
-| Position:                |                                                |
-|   San Jose, CA           |                                                |
-|   Lat: 37.123456         |                                                |
-|   Lon: -122.456789       |                                                |
-|   Distance: 2.3km        |                                                |
-+--------------------------+------------------------------------------------+
-```
+Comprehensive information about a selected node with DM capability. Select a node from the Nodes view and press Enter to see detailed info, telemetry, position, and message history.
 
 **Sub-tabs:**
 - **Messages** (`m`) - DM conversation with selected node
@@ -176,6 +127,8 @@ Comprehensive information about a selected node with DM capability.
 ### Settings View (S)
 
 Configure your Meshtastic device settings.
+
+![Settings view](screenshots/settings.svg)
 
 **Sub-tabs:**
 - **Radio** (`r`) - LoRa settings (region, modem preset, hop limit)
