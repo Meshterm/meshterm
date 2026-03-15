@@ -3,14 +3,14 @@
 from typing import Optional
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
-from textual.containers import Container, Vertical, Horizontal
+from textual.containers import Container, Vertical
 from textual.widgets import Static, ListView, ListItem, Label, Input
 from textual.binding import Binding
 from textual.message import Message
 from rich.text import Text
 
 from ..state import AppState
-from ..formatting import Colors, format_node_id
+from ..formatting import Colors
 
 
 class ChannelManager(ModalScreen):
@@ -310,7 +310,7 @@ class ChannelManager(ModalScreen):
                 self.state.open_dms.close_dm(node_id)
                 # Refresh the DM list
                 self._refresh_dm_list()
-                self.app.notify(f"Closed DM", timeout=2)
+                self.app.notify("Closed DM", timeout=2)
 
     def _refresh_dm_list(self):
         """Refresh the DM list after closing one."""

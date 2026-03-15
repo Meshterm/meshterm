@@ -2,7 +2,7 @@
 
 import glob
 import re
-from typing import Optional, Callable, Tuple
+from typing import Optional, Callable, Tuple, Union
 from pubsub import pub
 
 from .state import AppState, SUPPORTED_REACTIONS
@@ -332,7 +332,7 @@ class MeshtasticConnection:
         pub.unsubscribe(self._on_disconnected, "meshtastic.connection.lost")
         self.disconnect()
 
-    def send_message(self, text: str, dest: int | str = "^all", channel: int = 0) -> tuple[bool, int | None]:
+    def send_message(self, text: str, dest: Union[int, str] = "^all", channel: int = 0) -> Tuple[bool, Optional[int]]:
         """Send a text message.
 
         Args:

@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from math import radians, sin, cos, sqrt, atan2
+from typing import Optional, Tuple
 from rich.text import Text
 
 
@@ -399,7 +400,7 @@ def format_distance(km: float, short: bool = False) -> str:
             return f"{km:.1f} km"
 
 
-def get_node_position(node: dict) -> tuple[float, float] | None:
+def get_node_position(node: dict) -> Optional[Tuple[float, float]]:
     """Extract normalized lat/lon from a node's position data."""
     if not node:
         return None
@@ -416,7 +417,7 @@ def get_node_position(node: dict) -> tuple[float, float] | None:
     return None
 
 
-def lookup_postal_code(postal_code: str, country: str = 'US') -> tuple[float, float] | None:
+def lookup_postal_code(postal_code: str, country: str = 'US') -> Optional[Tuple[float, float]]:
     """Look up coordinates from a postal code.
 
     Returns (lat, lon) tuple or None if lookup fails.
@@ -435,7 +436,7 @@ def lookup_postal_code(postal_code: str, country: str = 'US') -> tuple[float, fl
     return None
 
 
-def get_location_name(lat: float, lon: float) -> str | None:
+def get_location_name(lat: float, lon: float) -> Optional[str]:
     """Get human-readable location name from coordinates.
 
     Returns city name with region, or None if lookup fails.

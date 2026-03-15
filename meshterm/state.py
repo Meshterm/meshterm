@@ -44,7 +44,7 @@ SUPPORTED_REACTIONS = {
     '❓': 'Question',
 }
 
-from .formatting import format_node_id, get_node_position
+from .formatting import format_node_id, get_node_position  # noqa: E402
 
 
 class Observable:

@@ -8,7 +8,6 @@ from textual import on
 
 from ..state import AppState
 from ..widgets.log_panel import LogPanel
-from ..formatting import Colors
 
 
 class LogView(Container):

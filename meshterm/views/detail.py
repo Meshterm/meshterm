@@ -1,15 +1,14 @@
 """Detail view - single node detail with sub-tabs."""
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal
+from textual.containers import Container
 from textual.widgets import Static, ContentSwitcher
 from textual.binding import Binding
 from rich.text import Text
 
 from ..state import AppState
 from ..formatting import (
-    format_node_id, format_time_ago, format_packet, format_payload,
-    Colors, haversine_distance, format_distance, get_node_position, get_location_name
+    format_time_ago, Colors, haversine_distance, format_distance, get_node_position, get_location_name
 )
 from ..widgets.dm_input import DMInput
 from ..widgets.chat_log import ChatLog

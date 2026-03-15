@@ -1,6 +1,6 @@
 """Header bar widget showing tabs and mode indicators."""
 
-from typing import List, Union
+from typing import List
 from textual.widgets import Static
 from textual.reactive import reactive
 from textual.binding import Binding

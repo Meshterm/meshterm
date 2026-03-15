@@ -11,7 +11,6 @@ from textual.containers import Container, Horizontal
 from textual.widgets import Static, Button, ProgressBar
 from textual.binding import Binding
 
-from ..formatting import Colors
 
 
 class ReconnectState(Enum):
@@ -180,7 +179,7 @@ class ReconnectingModal(ModalScreen[bool]):
             if self.reason == "reboot":
                 self._update_state(ReconnectState.WAITING_REBOOT)
                 self._update_status("Waiting for device to reboot...")
-                self._update_detail(f"Please wait...")
+                self._update_detail("Please wait...")
 
                 # Wait for reboot delay
                 for _ in range(int(self.REBOOT_DELAY * 10)):

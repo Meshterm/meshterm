@@ -2,7 +2,6 @@
 
 from typing import Optional, TYPE_CHECKING
 from textual.widgets import RichLog
-from textual.reactive import reactive
 from textual.message import Message
 from rich.text import Text
 

@@ -1,5 +1,7 @@
 """Nodes view - table of all known nodes."""
 
+from typing import Optional
+
 from textual.app import ComposeResult
 from textual.containers import Container
 from textual.widgets import Static, Input
@@ -112,7 +114,7 @@ class NodesView(Container):
                         return
             self._close_search()
 
-    def _get_first_row_node_id(self, table: NodeTable) -> str | None:
+    def _get_first_row_node_id(self, table: NodeTable) -> Optional[str]:
         """Get the node_id of the first row in the table."""
         # Access the internal row keys
         if table.rows:

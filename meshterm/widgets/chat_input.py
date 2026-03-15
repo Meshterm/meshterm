@@ -1,6 +1,5 @@
 """Inline chat input widget with channel selector."""
 
-from typing import Optional
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static, Input

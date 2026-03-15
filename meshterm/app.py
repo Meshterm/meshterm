@@ -26,20 +26,19 @@ _file_handler.setFormatter(logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 ))
 logging.getLogger().addHandler(_file_handler)
-from textual.containers import Container, Vertical
-from textual.binding import Binding
-from textual.widgets import TabbedContent, TabPane
+from textual.binding import Binding  # noqa: E402
+from textual.widgets import TabbedContent, TabPane  # noqa: E402
 
-from .state import AppState
-from .connection import MeshtasticConnection
-from .storage import LogStorage, PlainTextLogger
-from .views import LogView, NodesView, DetailView, ChatView, SettingsView
-from .widgets.status_bar import StatusBar
-from .widgets.header_bar import HeaderBar
-from .widgets.chat_input import ChatInput
-from .widgets.dm_input import DMInput
-from .widgets.help_modal import HelpModal
-from .widgets.reconnecting_modal import ReconnectingModal
+from .state import AppState  # noqa: E402
+from .connection import MeshtasticConnection  # noqa: E402
+from .storage import LogStorage, PlainTextLogger  # noqa: E402
+from .views import LogView, NodesView, DetailView, ChatView, SettingsView  # noqa: E402
+from .widgets.status_bar import StatusBar  # noqa: E402
+from .widgets.header_bar import HeaderBar  # noqa: E402
+from .widgets.chat_input import ChatInput  # noqa: E402
+from .widgets.dm_input import DMInput  # noqa: E402
+from .widgets.help_modal import HelpModal  # noqa: E402
+from .widgets.reconnecting_modal import ReconnectingModal  # noqa: E402
 
 
 # ASCII art logo
@@ -558,12 +557,12 @@ class Spinner:
         if self.thread:
             self.thread.join(timeout=0.2)
         # Clear the spinner line
-        print(f"\r\033[K", end="")
+        print("\r\033[K", end="")
         if final_message:
             print_status(final_message, status)
 
 
-def connect_to_device(port: Optional[str] = None) -> tuple[AppState, MeshtasticConnection, LogStorage, PlainTextLogger] | None:
+def connect_to_device(port: Optional[str] = None) -> Optional[tuple]:
     """Connect to a Meshtastic device. Returns (state, connection, storage, text_logger) or None if failed."""
     from pubsub import pub
     from meshtastic.serial_interface import SerialInterface

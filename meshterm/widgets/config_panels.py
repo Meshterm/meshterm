@@ -1,15 +1,13 @@
 """Configuration panels for Settings view."""
 
 import json
-from pathlib import Path
 from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll, Horizontal
 from textual.widgets import Static, Select, Input, Switch, Button, Label
 from textual.message import Message
 from textual.screen import ModalScreen
-from rich.text import Text
 
-from ..formatting import Colors, lookup_postal_code, get_location_name
+from ..formatting import lookup_postal_code, get_location_name
 from ..storage import get_data_dir
 
 

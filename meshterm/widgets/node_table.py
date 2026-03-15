@@ -1,6 +1,7 @@
 """Sortable node table widget."""
 
 import time
+from typing import Optional
 from textual.widgets import DataTable
 from textual.message import Message
 from textual.binding import Binding
@@ -389,7 +390,7 @@ class NodeTable(DataTable):
             return "bright_yellow"
         return "bright_green"
 
-    def _get_cursor_node_id(self) -> str | None:
+    def _get_cursor_node_id(self) -> Optional[str]:
         """Get the node_id of the currently highlighted row."""
         if self.cursor_row is None or self.row_count == 0:
             return None
