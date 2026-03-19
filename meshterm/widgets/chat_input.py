@@ -156,7 +156,7 @@ class ChatInput(Vertical):
         else:
             context.remove_class("visible")
 
-    def lock_input(self, reason: str = "Awaiting delivery...", timeout_seconds: float = 30.0):
+    def lock_input(self, reason: str = "Awaiting delivery...", timeout_seconds: float = 10.0):
         """Lock input until message delivery is confirmed."""
         self.send_locked = True
         self.lock_reason = reason

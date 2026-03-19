@@ -352,11 +352,18 @@ class ChatView(Container):
         """Unlock input when delivery status is updated."""
         if event_type == "delivery_updated":
             try:
-                chat_input = self.query_one("#chat-input", ChatInput)
-                if chat_input.send_locked:
-                    chat_input.unlock_input()
+                self.app.call_from_thread(self._unlock_if_locked)
             except Exception:
                 pass
+
+    def _unlock_if_locked(self):
+        """Thread-safe unlock — must be called on the main Textual thread."""
+        try:
+            chat_input = self.query_one("#chat-input", ChatInput)
+            if chat_input.send_locked:
+                chat_input.unlock_input()
+        except Exception:
+            pass
 
     def on_unmount(self):
         """Cleanup subscriptions."""
