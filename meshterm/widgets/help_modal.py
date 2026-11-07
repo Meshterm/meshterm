@@ -9,7 +9,6 @@ from rich.text import Text
 
 from ..formatting import Colors
 
-
 # Help content organized by context
 HELP_CONTENT = {
     "global": {

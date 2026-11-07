@@ -12,7 +12,6 @@ from typing import Optional
 from textual.app import App, ComposeResult
 from textual import on
 
-
 _error_logging_configured = False
 
 
@@ -60,7 +59,6 @@ from .widgets.chat_input import ChatInput  # noqa: E402
 from .widgets.dm_input import DMInput  # noqa: E402
 from .widgets.help_modal import HelpModal  # noqa: E402
 from .widgets.reconnecting_modal import ReconnectingModal  # noqa: E402
-
 
 # ASCII art logo
 LOGO = r"""

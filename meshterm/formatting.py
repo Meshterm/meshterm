@@ -7,7 +7,6 @@ from math import radians, sin, cos, sqrt, atan2
 from rich.text import Text
 from typing import Optional, Tuple
 
-
 MAX_TEXT_BYTES = 233
 
 # Terminal control characters that must never reach the display. Keep newline

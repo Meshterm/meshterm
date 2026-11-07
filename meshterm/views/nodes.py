@@ -189,21 +189,25 @@ class NodesView(Container):
         # Check current favorite status
         is_fav = self.state.nodes.is_favorite(node_id)
 
-        # Toggle via Meshtastic API if available
         try:
             interface = self.app.connection.interface
-            if interface and interface.localNode:
-                # Convert node_id to int for Meshtastic API
-                node_num = node.get("num") if node else None
-                if node_num:
-                    if is_fav:
-                        interface.localNode.removeFavorite(node_num)
-                    else:
-                        interface.localNode.setFavorite(node_num)
-        except Exception:
-            pass
+            node_num = node.get("num") if node else None
+            if not interface or not interface.localNode or not node_num:
+                self.app.notify("Not connected to device", severity="warning", markup=False)
+                return
+            if is_fav:
+                interface.localNode.removeFavorite(node_num)
+            else:
+                interface.localNode.setFavorite(node_num)
+        except (Exception, SystemExit) as e:
+            self.app.notify(
+                f"Favorite update failed: {sanitize_text(str(e))}",
+                severity="error",
+                markup=False,
+            )
+            return
 
-        # Update local state
+        # Update local state only after the device call succeeds
         self.state.nodes.set_favorite(node_id, not is_fav)
 
         if not is_fav:

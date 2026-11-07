@@ -8,3 +8,8 @@ pytest==9.2.0
 pytest-asyncio==1.4.1.post1
 pytest-cov==7.1.0
 pytest-textual-snapshot==1.0.0
+hypothesis==6.168.5
+black==26.10.1
+ruff==0.17.3
+setuptools==84.2.1
+wheel==0.48.0

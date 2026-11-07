@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meshterm"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A terminal user interface (TUI) for Meshtastic mesh networks"
 readme = "README.md"
 license = {text = "MIT"}
@@ -41,8 +41,11 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
     "pytest-textual-snapshot>=1.0.0",
-    "black",
-    "ruff",
+    "hypothesis>=6.0.0",
+    "black==26.10.1",
+    "ruff==0.17.3",
+    "setuptools==84.2.1",
+    "wheel==0.48.0",
 ]
 
 [project.scripts]
@@ -56,6 +59,13 @@ Issues = "https://github.com/Meshterm/meshterm/issues"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["meshterm*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "meshterm.__version__"}
+
+
+[tool.uv]
+exclude-newer = "P3D"
 
 [tool.black]
 line-length = 100
@@ -83,4 +93,4 @@ source = ["meshterm"]
 branch = true
 
 [tool.coverage.report]
-fail_under = 30
+fail_under = 48

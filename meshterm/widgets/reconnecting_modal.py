@@ -216,7 +216,7 @@ class ReconnectingModal(ModalScreen[bool]):
             self._update_detail("Click Retry to try again")
             self.app.call_from_thread(self._enable_retry)
 
-        except Exception as e:
+        except (Exception, SystemExit) as e:
             self._update_state(ReconnectState.FAILED)
             self._update_status(f"Error: {str(e)[:30]}")
             self._update_spinner_symbol("✗")
@@ -276,7 +276,7 @@ class ReconnectingModal(ModalScreen[bool]):
 
             return True
 
-        except Exception:
+        except (Exception, SystemExit):
             return False
 
     def _update_state(self, state: ReconnectState):

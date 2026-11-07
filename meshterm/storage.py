@@ -13,7 +13,6 @@ from typing import List, Optional, Tuple
 
 from .formatting import format_node_id, is_broadcast_destination
 
-
 MAX_PACKET_ID = 0xFFFFFFFF
 logger = logging.getLogger(__name__)
 
@@ -209,6 +208,8 @@ class LogStorage:
     def store_packet(self, packet: dict, timestamp: float) -> int:
         """Store a packet and return its database ID."""
         decoded = packet.get("decoded", {})
+        if not isinstance(decoded, dict):
+            decoded = {}
         portnum = str(decoded.get("portnum", ""))
 
         from_id = packet.get("from", packet.get("fromId", ""))
@@ -591,7 +592,7 @@ class LogStorage:
             )
             self._conn.commit()
         except Exception:
-            pass  # Don't let storage errors break the app
+            logger.exception("Failed to persist node %s", node_id_str)
 
     def get_all_nodes(self) -> dict:
         """Load all nodes from the database.
@@ -702,12 +703,7 @@ class LogStorage:
 
         placeholders = ",".join("?" for _ in message_db_ids)
         cursor = self._conn.execute(
-            f"""
-            SELECT message_db_id, emoji, reactor_node, timestamp
-            FROM reactions
-            WHERE message_db_id IN ({placeholders})
-            ORDER BY message_db_id, timestamp
-            """,
+            f"SELECT message_db_id, emoji, reactor_node, timestamp FROM reactions WHERE message_db_id IN ({placeholders}) ORDER BY message_db_id, timestamp",  # nosec B608: placeholders are fixed '?'
             message_db_ids,
         )
 
@@ -840,11 +836,7 @@ class LogStorage:
 
         placeholders = ",".join("?" for _ in message_db_ids)
         cursor = self._conn.execute(
-            f"""
-            SELECT reply_db_id, parent_db_id, parent_packet_id, timestamp
-            FROM reply_refs
-            WHERE reply_db_id IN ({placeholders})
-            """,
+            f"SELECT reply_db_id, parent_db_id, parent_packet_id, timestamp FROM reply_refs WHERE reply_db_id IN ({placeholders})",  # nosec B608: placeholders are fixed '?'
             message_db_ids,
         )
 

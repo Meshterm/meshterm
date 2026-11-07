@@ -3,10 +3,13 @@
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Any, Optional, TYPE_CHECKING
+import logging
 import time
 
 if TYPE_CHECKING:
     from .storage import LogStorage
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,11 +71,11 @@ class Observable:
 
     def notify(self, event_type: str = "update", data: Any = None):
         """Notify all listeners of an update."""
-        for callback in self._listeners:
+        for callback in list(self._listeners):
             try:
                 callback(event_type, data)
             except Exception:
-                pass
+                logger.exception("State listener failed for %s", event_type)
 
 
 @dataclass
@@ -367,7 +370,7 @@ class MessageBuffer(Observable):
                 db_id = self._storage.store_packet(packet, timestamp)
                 entry["_db_id"] = db_id
             except Exception:
-                pass  # Don't let storage errors prevent message display
+                logger.exception("Failed to persist message")
         self._messages.append(entry)
         self.notify("message_added", entry)
         return db_id
@@ -467,10 +470,16 @@ class StatsTracker(Observable):
 
         # Extract channel utilization from telemetry
         decoded = packet.get("decoded", {})
+        if not isinstance(decoded, dict):
+            decoded = {}
         portnum = str(decoded.get("portnum", ""))
         if portnum in ("TELEMETRY_APP", "67"):
             telemetry = decoded.get("telemetry", {})
+            if not isinstance(telemetry, dict):
+                telemetry = {}
             device = telemetry.get("deviceMetrics", {})
+            if not isinstance(device, dict):
+                device = {}
             if "channelUtilization" in device:
                 # Channel 0 by default, could extract from packet channel
                 channel = packet.get("channel", 0)

@@ -1,6 +1,10 @@
 # Virtual environment
 venv/
 
+.test-tmp/
+.pytest_cache/
+.hypothesis/
+
 # Python
 __pycache__/
 *.py[cod]

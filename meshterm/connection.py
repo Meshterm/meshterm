@@ -1,6 +1,7 @@
 """Meshtastic interface management."""
 
 import glob
+import logging
 import re
 from typing import Callable, Optional, Tuple, Union
 
@@ -15,6 +16,8 @@ from .formatting import (
 from .state import SUPPORTED_REACTIONS, AppState
 
 MAX_PACKET_ID = 0xFFFFFFFF
+
+logger = logging.getLogger(__name__)
 
 
 def _valid_packet_id(value) -> bool:
@@ -84,17 +87,25 @@ class MeshtasticConnection:
 
     def _on_receive(self, packet, interface):
         """Handle received packets."""
+        if interface is not None and interface is not self.interface:
+            return
+        if not isinstance(packet, dict):
+            return
         import time
 
         timestamp = time.time()
 
         # Check for incoming DMs (TEXT_MESSAGE_APP on channel 0, to=my_node_id)
         decoded = packet.get("decoded", {})
+        if not isinstance(decoded, dict):
+            decoded = {}
         portnum = str(decoded.get("portnum", ""))
 
         # Check for reaction/reply prefixes in TEXT_MESSAGE_APP
         if portnum in ("TEXT_MESSAGE_APP", "1"):
             text = decoded.get("text", "")
+            if not isinstance(text, str):
+                text = ""
             from_id = format_node_id(packet.get("from", ""))
 
             # Check for reaction prefix: [R:<packet_id>:<emoji>]
@@ -187,16 +198,18 @@ class MeshtasticConnection:
 
             # Extract data from decoded payload
             decoded = packet.get("decoded", {})
+            if not isinstance(decoded, dict):
+                decoded = {}
             portnum = str(decoded.get("portnum", ""))
 
             if portnum in ("NODEINFO_APP", "4"):
                 user = decoded.get("user", {})
-                if user:
+                if isinstance(user, dict) and user:
                     node_update["user"] = user
 
             elif portnum in ("POSITION_APP", "3"):
                 position = decoded.get("position", {})
-                if position:
+                if isinstance(position, dict) and position:
                     node_update["position"] = position
                     # Update my_position if this is from our node
                     if format_node_id(from_id) == self.state.my_node_id:
@@ -206,8 +219,10 @@ class MeshtasticConnection:
 
             elif portnum in ("TELEMETRY_APP", "67"):
                 telemetry = decoded.get("telemetry", {})
+                if not isinstance(telemetry, dict):
+                    telemetry = {}
                 device = telemetry.get("deviceMetrics", {})
-                if device:
+                if isinstance(device, dict) and device:
                     node_update["deviceMetrics"] = device
 
             if node_update:
@@ -297,6 +312,11 @@ class MeshtasticConnection:
 
     def _on_connected(self, interface, topic=None):
         """Handle connection established."""
+        if interface is not None and interface is not self.interface:
+            return
+        if self.state.connected and self.interface is interface:
+            return
+
         info = {}
 
         try:
@@ -332,7 +352,7 @@ class MeshtasticConnection:
                         self.state.set_my_position(*coords)
 
         except Exception:
-            pass
+            logger.exception("Failed to import connection state")
 
         self.state.set_connected(True, info)
 
@@ -341,6 +361,10 @@ class MeshtasticConnection:
 
     def _on_disconnected(self, interface, topic=None):
         """Handle disconnection."""
+        if interface is not None and interface is not self.interface:
+            return
+
+        self.interface = None
         self.state.set_connected(False)
 
         if self._on_status_change:
@@ -432,7 +456,7 @@ class MeshtasticConnection:
             )
             request_id = mesh_packet.id if mesh_packet else None
             return True, request_id
-        except Exception:
+        except (Exception, SystemExit):
             return False, None
 
     def send_reaction(
@@ -606,7 +630,7 @@ class MeshtasticConnection:
                 setattr(target, key, value)
             node.writeConfig(config_type)
             return True
-        except Exception:
+        except (Exception, SystemExit):
             target.CopyFrom(snapshot)
             return False
 
@@ -626,7 +650,7 @@ class MeshtasticConnection:
                 setattr(target, key, value)
             node.writeConfig(config_type)
             return True
-        except Exception:
+        except (Exception, SystemExit):
             target.CopyFrom(snapshot)
             return False
 
@@ -642,11 +666,14 @@ class MeshtasticConnection:
         """
         if not self.interface or not self.interface.localNode:
             return False
+        for value in (long_name, short_name):
+            if value is not None and not str(value).strip():
+                return False
 
         try:
             self.interface.localNode.setOwner(long_name=long_name, short_name=short_name)
             return True
-        except Exception:
+        except (Exception, SystemExit):
             return False
 
     def write_channel(self, index: int, settings: dict) -> bool:
@@ -681,11 +708,11 @@ class MeshtasticConnection:
             node.channels[index] = ch
             try:
                 node.writeChannel(index)
-            except Exception:
+            except (Exception, SystemExit):
                 node.channels[index] = previous
                 raise
             return True
-        except Exception:
+        except (Exception, SystemExit):
             return False
 
     def get_shareable_channels(self) -> list[dict]:
@@ -979,5 +1006,5 @@ class MeshtasticConnection:
                 return False, errors, f"Import completed with {len(errors)} errors"
             return True, [], "Config imported successfully"
 
-        except Exception as e:
+        except (Exception, SystemExit) as e:
             return False, errors, f"Import failed: {str(e)}"
