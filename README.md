@@ -81,6 +81,10 @@ meshterm /dev/ttyACM0
 bin/run [port]
 ```
 
+Mouse: click the header tabs to switch views, click a node row to open its
+details, and scroll the chat or log with the wheel. Keyboard shortcuts remain
+available.
+
 ## Views
 
 ### Nodes View (N)
