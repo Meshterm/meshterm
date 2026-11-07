@@ -339,7 +339,9 @@ class RadioConfigPanel(ConfigPanel):
 class ChannelsPanel(ConfigPanel):
     """Panel for channel configuration."""
 
-    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DEFAULT_CSS = (
+        ConfigPanel.DEFAULT_CSS
+        + """
     ChannelsPanel .channel-selector {
         height: 3;
         margin-bottom: 1;
@@ -355,6 +357,7 @@ class ChannelsPanel(ConfigPanel):
         background: $primary;
     }
     """
+    )
 
     def __init__(self, connection, **kwargs):
         super().__init__(connection, **kwargs)
@@ -528,7 +531,9 @@ class ChannelsPanel(ConfigPanel):
 class PositionPanel(ConfigPanel):
     """Panel for GPS/position settings."""
 
-    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DEFAULT_CSS = (
+        ConfigPanel.DEFAULT_CSS
+        + """
     PositionPanel .section-header {
         margin-top: 1;
         margin-bottom: 1;
@@ -541,6 +546,7 @@ class PositionPanel(ConfigPanel):
         color: $success;
     }
     """
+    )
 
     def __init__(self, connection, state=None, **kwargs):
         super().__init__(connection, **kwargs)
@@ -798,7 +804,9 @@ class PositionPanel(ConfigPanel):
 class DevicePanel(ConfigPanel):
     """Panel for device role settings."""
 
-    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DEFAULT_CSS = (
+        ConfigPanel.DEFAULT_CSS
+        + """
     DevicePanel .section-header {
         margin-top: 1;
         margin-bottom: 1;
@@ -806,6 +814,7 @@ class DevicePanel(ConfigPanel):
         color: $text;
     }
     """
+    )
 
     def compose(self) -> ComposeResult:
         # Long name
@@ -1101,7 +1110,9 @@ class ConfirmDialog(ModalScreen):
 class AdvancedPanel(ConfigPanel):
     """Panel for advanced/dangerous device operations."""
 
-    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DEFAULT_CSS = (
+        ConfigPanel.DEFAULT_CSS
+        + """
     AdvancedPanel .section-header {
         margin-top: 1;
         margin-bottom: 1;
@@ -1142,6 +1153,7 @@ class AdvancedPanel(ConfigPanel):
         margin-right: 2;
     }
     """
+    )
 
     def __init__(self, connection, state=None, **kwargs):
         super().__init__(connection, **kwargs)
