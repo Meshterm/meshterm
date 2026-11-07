@@ -12,9 +12,9 @@ from textual.widgets import Static, Button, ProgressBar
 from textual.binding import Binding
 
 
-
 class ReconnectState(Enum):
     """States for reconnection process."""
+
     WAITING_REBOOT = "waiting_reboot"
     OPENING_PORT = "opening_port"
     WAITING_DEVICE = "waiting_device"
@@ -94,16 +94,10 @@ class ReconnectingModal(ModalScreen[bool]):
     # Reconnection settings
     MAX_ATTEMPTS = 5
     REBOOT_DELAY = 3.0  # Seconds to wait for device reboot
-    RETRY_DELAY = 2.0   # Seconds between retry attempts
+    RETRY_DELAY = 2.0  # Seconds between retry attempts
     CONNECT_TIMEOUT = 10.0  # Seconds to wait for connection
 
-    def __init__(
-        self,
-        connection,
-        reason: str = "reconnect",
-        port: Optional[str] = None,
-        **kwargs
-    ):
+    def __init__(self, connection, reason: str = "reconnect", port: Optional[str] = None, **kwargs):
         """Initialize the reconnecting modal.
 
         Args:
@@ -117,7 +111,9 @@ class ReconnectingModal(ModalScreen[bool]):
         self.port = port or connection.port
 
         # State tracking
-        self._state = ReconnectState.WAITING_REBOOT if reason == "reboot" else ReconnectState.OPENING_PORT
+        self._state = (
+            ReconnectState.WAITING_REBOOT if reason == "reboot" else ReconnectState.OPENING_PORT
+        )
         self._attempt = 0
         self._cancel_requested = False
         self._reconnect_thread: Optional[threading.Thread] = None
@@ -254,8 +250,15 @@ class ReconnectingModal(ModalScreen[bool]):
         self._update_status("Connecting to device...")
 
         try:
-            # Create new interface with timeout
-            interface = SerialInterface(self.port)
+            # Create new interface with the configured connection deadline
+            started = time.time()
+            interface = SerialInterface(self.port, timeout=int(self.CONNECT_TIMEOUT))
+            if time.time() - started > self.CONNECT_TIMEOUT:
+                try:
+                    interface.close()
+                except Exception:
+                    pass
+                return False
 
             if self._cancel_requested:
                 try:
@@ -282,42 +285,54 @@ class ReconnectingModal(ModalScreen[bool]):
 
     def _update_status(self, text: str):
         """Update the status text (thread-safe)."""
+
         def update():
             try:
                 status = self.query_one("#status-text", Static)
                 status.update(text)
             except Exception:
                 pass
+
         self.app.call_from_thread(update)
 
     def _update_detail(self, text: str):
         """Update the detail text (thread-safe)."""
+
         def update():
             try:
                 detail = self.query_one("#detail-text", Static)
                 detail.update(text)
             except Exception:
                 pass
+
         self.app.call_from_thread(update)
 
+    def _set_progress(self, value: int):
+        """Update the progress bar on the UI thread."""
+        try:
+            progress = self.query_one("#progress-bar", ProgressBar)
+            progress.progress = value
+        except Exception:
+            pass
+
     def _update_progress(self, value: int):
-        """Update the progress bar (thread-safe)."""
-        def update():
-            try:
-                progress = self.query_one("#progress-bar", ProgressBar)
-                progress.progress = value
-            except Exception:
-                pass
-        self.app.call_from_thread(update)
+        """Update the progress bar from any thread."""
+        app_thread = getattr(self.app, "_thread_id", None)
+        if app_thread is not None and threading.get_ident() == app_thread:
+            self._set_progress(value)
+            return
+        self.app.call_from_thread(self._set_progress, value)
 
     def _update_spinner_symbol(self, symbol: str):
         """Update the spinner to show a final symbol (thread-safe)."""
+
         def update():
             try:
                 spinner = self.query_one("#spinner", Static)
                 spinner.update(symbol)
             except Exception:
                 pass
+
         self.app.call_from_thread(update)
 
     def _enable_retry(self):
@@ -345,5 +360,5 @@ class ReconnectingModal(ModalScreen[bool]):
             # Reset and retry
             event.button.disabled = True
             self._attempt = 0
-            self._update_progress(0)
+            self._set_progress(0)
             self._start_reconnect()

@@ -19,7 +19,7 @@ fi
 
 echo "Installing dependencies..."
 "$PROJECT_DIR/venv/bin/python" -m pip install --quiet --upgrade pip
-"$PROJECT_DIR/venv/bin/python" -m pip install --quiet -r "$PROJECT_DIR/requirements.txt"
+"$PROJECT_DIR/venv/bin/python" -m pip install --quiet -c "$PROJECT_DIR/constraints.txt" -r "$PROJECT_DIR/requirements.txt"
 
 echo "─────────────────────────────────────"
 echo "Done! Run with: bin/run [port]"

@@ -8,6 +8,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, Label
 from rich.text import Text
 
+from ..formatting import sanitize_text
 from ..state import SUPPORTED_REACTIONS
 
 
@@ -65,6 +66,7 @@ class ReactionPicker(ModalScreen):
 
     class ReactionSelected(Message):
         """Posted when a reaction is selected."""
+
         def __init__(self, emoji: str, entry: dict):
             self.emoji = emoji
             self.entry = entry
@@ -72,6 +74,7 @@ class ReactionPicker(ModalScreen):
 
     class Cancelled(Message):
         """Posted when picker is cancelled."""
+
         pass
 
     def __init__(self, entry: dict, sender_name: str = ""):
@@ -88,7 +91,10 @@ class ReactionPicker(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Container():
-            yield Label(f"React to message from {self.sender_name}:", classes="title")
+            yield Label(
+                Text(f"React to message from {sanitize_text(self.sender_name)}:"),
+                classes="title",
+            )
 
             # First row: 1-3
             with Horizontal(classes="reactions-row"):

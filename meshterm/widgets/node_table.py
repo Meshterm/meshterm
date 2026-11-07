@@ -10,7 +10,12 @@ from rich.cells import cell_len
 
 from ..state import AppState
 from ..formatting import (
-    format_time_ago, Colors, haversine_distance, format_distance, get_node_position
+    format_time_ago,
+    Colors,
+    format_distance,
+    get_node_position,
+    haversine_distance,
+    sanitize_text,
 )
 
 
@@ -33,12 +38,14 @@ class NodeTable(DataTable):
 
     class FavoriteRequested(Message):
         """Posted when user presses 'f' to toggle favorite."""
+
         def __init__(self, node_id: str):
             self.node_id = node_id
             super().__init__()
 
     class InviteRequested(Message):
         """Posted when user presses 'i' to invite to channel."""
+
         def __init__(self, node_id: str):
             self.node_id = node_id
             super().__init__()
@@ -63,27 +70,33 @@ class NodeTable(DataTable):
     # Sort key functions - each returns a sortable value for the column
     # t = current time threshold for online check
     SORT_KEYS = {
-        "on?": lambda n, t, my_pos: (n.get('lastHeard', 0) or 0) > t - 900,
-        "key": lambda n, t, my_pos: 1 if n.get('has_public_key') or bool(n.get('user', {}).get('publicKey')) else 0,
-        "name": lambda n, t, my_pos: str(n.get('user', {}).get('longName') or '').lower(),
-        "short": lambda n, t, my_pos: str(n.get('user', {}).get('shortName') or '').lower(),
-        "hardware": lambda n, t, my_pos: str(n.get('user', {}).get('hwModel') or '').lower(),
+        "on?": lambda n, t, my_pos: (n.get("lastHeard", 0) or 0) > t - 900,
+        "key": lambda n, t, my_pos: (
+            1 if n.get("has_public_key") or bool(n.get("user", {}).get("publicKey")) else 0
+        ),
+        "name": lambda n, t, my_pos: str(n.get("user", {}).get("longName") or "").lower(),
+        "short": lambda n, t, my_pos: str(n.get("user", {}).get("shortName") or "").lower(),
+        "hardware": lambda n, t, my_pos: str(n.get("user", {}).get("hwModel") or "").lower(),
         "dist": lambda n, t, my_pos: NodeTable._calc_distance(n, my_pos),
-        "hops": lambda n, t, my_pos: n.get('hops') if n.get('hops') is not None else (n.get('hopsAway') if n.get('hopsAway') is not None else 999),
-        "snr": lambda n, t, my_pos: n.get('snr') if n.get('snr') is not None else -999,
-        "rssi": lambda n, t, my_pos: n.get('rssi') if n.get('rssi') is not None else -999,
-        "bat": lambda n, t, my_pos: n.get('deviceMetrics', {}).get('batteryLevel', -1),
-        "seen": lambda n, t, my_pos: n.get('lastHeard', 0) or 0,
+        "hops": lambda n, t, my_pos: (
+            n.get("hops")
+            if n.get("hops") is not None
+            else (n.get("hopsAway") if n.get("hopsAway") is not None else 999)
+        ),
+        "snr": lambda n, t, my_pos: n.get("snr") if n.get("snr") is not None else -999,
+        "rssi": lambda n, t, my_pos: n.get("rssi") if n.get("rssi") is not None else -999,
+        "bat": lambda n, t, my_pos: n.get("deviceMetrics", {}).get("batteryLevel", -1),
+        "seen": lambda n, t, my_pos: n.get("lastHeard", 0) or 0,
     }
 
     @staticmethod
     def _calc_distance(node: dict, my_pos: tuple | None) -> float:
         """Calculate distance from my node to given node."""
         if not my_pos:
-            return float('inf')
+            return float("inf")
         node_pos = get_node_position(node)
         if not node_pos:
-            return float('inf')
+            return float("inf")
         return haversine_distance(my_pos[0], my_pos[1], node_pos[0], node_pos[1])
 
     def __init__(self, state: AppState, **kwargs):
@@ -164,19 +177,19 @@ class NodeTable(DataTable):
     def _matches_filter(self, node_id: str, node: dict) -> bool:
         """Check if a node matches the current filters."""
         if self._online_only:
-            last_heard = node.get('lastHeard', 0) or 0
+            last_heard = node.get("lastHeard", 0) or 0
             if int(time.time()) - last_heard >= self.ONLINE_THRESHOLD:
                 return False
 
         if not self._filter:
             return True
 
-        user = node.get('user', {})
+        user = node.get("user", {})
         searchable = [
             node_id.lower(),
-            user.get('longName', '').lower(),
-            user.get('shortName', '').lower(),
-            str(user.get('hwModel', '')).lower(),
+            user.get("longName", "").lower(),
+            user.get("shortName", "").lower(),
+            str(user.get("hwModel", "")).lower(),
         ]
         return any(self._filter in s for s in searchable)
 
@@ -243,7 +256,7 @@ class NodeTable(DataTable):
         if sort_func:
             other_nodes.sort(
                 key=lambda item: sort_func(item[1], current_time, my_pos),
-                reverse=not self._sort_ascending
+                reverse=not self._sort_ascending,
             )
 
         # Build final list with own node first
@@ -269,9 +282,9 @@ class NodeTable(DataTable):
 
     def _add_node_row(self, node_id: str, node: dict):
         """Add a row for a node."""
-        user = node.get('user', {})
-        metrics = node.get('deviceMetrics', {})
-        last_heard = node.get('lastHeard')
+        user = node.get("user", {})
+        metrics = node.get("deviceMetrics", {})
+        last_heard = node.get("lastHeard")
 
         # Determine online status
         is_online = False
@@ -283,17 +296,17 @@ class NodeTable(DataTable):
         style = self._get_recency_style(last_heard)
 
         # Build row data
-        name = user.get('longName', node_id)
+        name = user.get("longName", node_id)
 
         # Check if own node or favorite
         is_me = node_id == self.state.my_node_id
-        is_favorite = node.get('is_favorite', False)
-        short = user.get('shortName', '')
-        hw = str(user.get('hwModel', ''))
-        hops = node.get('hops') or node.get('hopsAway')
-        snr = node.get('snr')
-        rssi = node.get('rssi')
-        battery = metrics.get('batteryLevel', node.get('batteryLevel'))
+        is_favorite = node.get("is_favorite", False)
+        short = user.get("shortName", "")
+        hw = str(user.get("hwModel", ""))
+        hops = node.get("hops") or node.get("hopsAway")
+        snr = node.get("snr")
+        rssi = node.get("rssi")
+        battery = metrics.get("batteryLevel", node.get("batteryLevel"))
 
         # Online indicator
         if is_online:
@@ -302,9 +315,9 @@ class NodeTable(DataTable):
             online_text = Text("[ ]", style=Colors.DIM)
 
         # PKI status
-        has_key = node.get('has_public_key', False)
+        has_key = node.get("has_public_key", False)
         if not has_key:
-            has_key = bool(user.get('publicKey'))
+            has_key = bool(user.get("publicKey"))
         if has_key:
             pki_text = Text("[*]", style="bright_green")
         else:
@@ -326,21 +339,21 @@ class NodeTable(DataTable):
             prefix_width = cell_len(prefix)
             name_text = Text()
             name_text.append(prefix, style=prefix_style)
-            rest = Text(name, style=style)
+            rest = Text(sanitize_text(name), style=style)
             rest.truncate(name_col_width - prefix_width)
             name_text.append(rest)
         else:
-            name_text = Text(name, style=style)
+            name_text = Text(sanitize_text(name), style=style)
             name_text.truncate(name_col_width)
 
         # Truncate short name and hardware with cell-aware truncation
-        short_text = Text(short or '', style=style)
+        short_text = Text(sanitize_text(short or ""), style=style)
         short_text.truncate(6)
-        hw_text = Text(hw or '', style=Colors.DIM)
+        hw_text = Text(sanitize_text(hw or ""), style=Colors.DIM)
         hw_text.truncate(14)
 
         # Calculate distance from my node
-        dist_str = ''
+        dist_str = ""
         my_pos = self.state.my_position
         node_pos = get_node_position(node)
         if my_pos and node_pos:
@@ -353,11 +366,15 @@ class NodeTable(DataTable):
             name_text,
             short_text,
             hw_text,
-            Text(str(hops) if hops is not None else '', style="bright_cyan" if hops else Colors.DIM),
+            Text(
+                str(hops) if hops is not None else "", style="bright_cyan" if hops else Colors.DIM
+            ),
             Text(dist_str, style="bright_blue" if dist_str else Colors.DIM),
-            Text(f"{snr:.1f}" if snr is not None else '', style=Colors.SNR if snr else Colors.DIM),
-            Text(str(rssi) if rssi is not None else '', style=Colors.RSSI if rssi else Colors.DIM),
-            Text(f"{battery}%" if battery is not None else '', style=self._get_battery_style(battery)),
+            Text(f"{snr:.1f}" if snr is not None else "", style=Colors.SNR if snr else Colors.DIM),
+            Text(str(rssi) if rssi is not None else "", style=Colors.RSSI if rssi else Colors.DIM),
+            Text(
+                f"{battery}%" if battery is not None else "", style=self._get_battery_style(battery)
+            ),
             Text(format_time_ago(last_heard), style=style),
         ]
 

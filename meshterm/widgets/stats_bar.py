@@ -52,7 +52,7 @@ class StatsBar(Static):
         now = int(time.time())
         online = 0
         for node in nodes.values():
-            last_heard = node.get('lastHeard', 0)
+            last_heard = node.get("lastHeard", 0)
             if last_heard and (now - last_heard) < 900:
                 online += 1
         self.online_count = online

@@ -64,20 +64,20 @@ class MessageDetailsModal(ModalScreen):
             yield Static("Press Esc to close", classes="hint")
 
     def _build_details(self) -> Text:
-        packet = self.entry.get('packet', {})
-        decoded = packet.get('decoded', {})
-        is_tx = packet.get('_tx', False)
+        packet = self.entry.get("packet", {})
+        decoded = packet.get("decoded", {})
+        is_tx = packet.get("_tx", False)
 
         text = Text()
 
         # Message text
-        msg_text = decoded.get('text', '')
+        msg_text = decoded.get("text", "")
         text.append("Message: ", style="bold bright_cyan")
         text.append(f"{msg_text}\n", style=Colors.TEXT)
         text.append("\n")
 
         # Sender
-        from_id = packet.get('from', packet.get('fromId'))
+        from_id = packet.get("from", packet.get("fromId"))
         sender_name = self._get_node_display(from_id)
         text.append("From: ", style="bold bright_cyan")
         text.append(f"{sender_name}", style="bold bright_magenta" if is_tx else "bold bright_green")
@@ -86,9 +86,9 @@ class MessageDetailsModal(ModalScreen):
         text.append("\n")
 
         # Destination
-        to_id = packet.get('to', '')
+        to_id = packet.get("to", "")
         to_display = format_node_id(to_id)
-        if to_display in ('^all', '!ffffffff'):
+        if to_display in ("^all", "!ffffffff"):
             to_display = "Broadcast (all)"
         else:
             to_display = self._get_node_display(to_id)
@@ -96,8 +96,12 @@ class MessageDetailsModal(ModalScreen):
         text.append(f"{to_display}\n", style=Colors.TEXT)
 
         # Channel
-        channel = packet.get('channel', 0)
-        channel_name = self.state.get_channel_name(channel) if hasattr(self.state, 'get_channel_name') else None
+        channel = packet.get("channel", 0)
+        channel_name = (
+            self.state.get_channel_name(channel)
+            if hasattr(self.state, "get_channel_name")
+            else None
+        )
         text.append("Channel: ", style="bold bright_cyan")
         text.append(f"{channel}")
         if channel_name:
@@ -105,14 +109,14 @@ class MessageDetailsModal(ModalScreen):
         text.append("\n")
 
         # Timestamp
-        timestamp = self.entry.get('timestamp', None)
+        timestamp = self.entry.get("timestamp", None)
         if timestamp:
-            time_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+            time_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
             text.append("Time: ", style="bold bright_cyan")
             text.append(f"{time_str}\n", style=Colors.TEXT)
 
         # Packet ID
-        packet_id = packet.get('id')
+        packet_id = packet.get("id")
         if packet_id:
             text.append("Packet ID: ", style="bold bright_cyan")
             text.append(f"{packet_id}\n", style=Colors.DIM)
@@ -121,20 +125,20 @@ class MessageDetailsModal(ModalScreen):
 
         # Delivery info (TX messages)
         if is_tx:
-            delivered = packet.get('_delivered')
+            delivered = packet.get("_delivered")
             text.append("Delivery: ", style="bold bright_cyan")
             if delivered is None:
                 text.append("Pending\n", style="bright_yellow")
             elif delivered:
                 text.append("Delivered\n", style="bright_green")
             else:
-                error = packet.get('_error_reason', 'Unknown')
+                error = packet.get("_error_reason", "Unknown")
                 text.append(f"Failed ({error})\n", style="bright_red")
 
         # Hop info (received messages)
         if not is_tx:
-            hop_start = packet.get('hopStart')
-            hop_limit = packet.get('hopLimit')
+            hop_start = packet.get("hopStart")
+            hop_limit = packet.get("hopLimit")
             if hop_start is not None and hop_limit is not None:
                 hops = hop_start - hop_limit
                 text.append("Hops: ", style="bold bright_cyan")
@@ -142,8 +146,8 @@ class MessageDetailsModal(ModalScreen):
                 text.append(f" (start: {hop_start}, limit: {hop_limit})\n", style=Colors.DIM)
 
             # Signal info
-            snr = packet.get('rxSnr')
-            rssi = packet.get('rxRssi')
+            snr = packet.get("rxSnr")
+            rssi = packet.get("rxRssi")
             if snr is not None:
                 text.append("SNR: ", style="bold bright_cyan")
                 text.append(f"{snr} dB\n", style=Colors.TEXT)
@@ -157,25 +161,25 @@ class MessageDetailsModal(ModalScreen):
             if node:
                 text.append("\n")
                 text.append("Node Info\n", style="bold bright_cyan")
-                user = node.get('user', {})
+                user = node.get("user", {})
 
-                hw_model = user.get('hwModel')
+                hw_model = user.get("hwModel")
                 if hw_model:
                     text.append("  Hardware: ", style=Colors.DIM)
                     text.append(f"{hw_model}\n", style=Colors.TEXT)
 
-                hops_away = node.get('hopsAway')
+                hops_away = node.get("hopsAway")
                 if hops_away is not None:
                     text.append("  Hops away: ", style=Colors.DIM)
                     text.append(f"{hops_away}\n", style=Colors.TEXT)
 
-                last_heard = node.get('lastHeard')
+                last_heard = node.get("lastHeard")
                 if last_heard:
-                    heard_str = datetime.fromtimestamp(last_heard).strftime('%Y-%m-%d %H:%M:%S')
+                    heard_str = datetime.fromtimestamp(last_heard).strftime("%Y-%m-%d %H:%M:%S")
                     text.append("  Last heard: ", style=Colors.DIM)
                     text.append(f"{heard_str}\n", style=Colors.TEXT)
 
-                node_snr = node.get('snr')
+                node_snr = node.get("snr")
                 if node_snr is not None:
                     text.append("  Node SNR: ", style=Colors.DIM)
                     text.append(f"{node_snr} dB\n", style=Colors.TEXT)
@@ -188,8 +192,8 @@ class MessageDetailsModal(ModalScreen):
             return "???"
         node = self.state.nodes.get_node(node_id)
         if node:
-            user = node.get('user', {})
-            return user.get('longName') or user.get('shortName') or format_node_id(node_id)
+            user = node.get("user", {})
+            return user.get("longName") or user.get("shortName") or format_node_id(node_id)
         return format_node_id(node_id)
 
     def action_close(self):

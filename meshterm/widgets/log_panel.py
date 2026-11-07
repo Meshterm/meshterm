@@ -6,7 +6,14 @@ from textual.message import Message
 from rich.text import Text
 
 from ..state import AppState
-from ..formatting import format_packet, format_payload, format_verbose, pretty_print_json, Colors, format_node_id
+from ..formatting import (
+    format_packet,
+    format_payload,
+    format_verbose,
+    pretty_print_json,
+    Colors,
+    format_node_id,
+)
 
 if TYPE_CHECKING:
     from ..storage import LogStorage
@@ -16,20 +23,22 @@ class LogPanel(RichLog):
 
     class HistoryLoaded(Message):
         """Posted when history loading completes."""
+
         pass
+
     """Scrollable panel showing packet log."""
 
     HISTORY_PAGE_SIZE = 50
 
     def __init__(self, state: AppState, **kwargs):
-        super().__init__(highlight=True, markup=True, wrap=True, **kwargs)
+        super().__init__(highlight=True, markup=True, wrap=True, max_lines=5000, **kwargs)
         self.state = state
         self._oldest_id: Optional[int] = None
         self._history_exhausted = False
         self._loading_history = False
 
         # Search state
-        self._displayed_entries: list = []
+        self._displayed_entries: list = []  # bounded manually below
         self._search_term: str = ""
         self._match_entries: list = []
         self._filter_active: bool = False
@@ -51,9 +60,21 @@ class LogPanel(RichLog):
         return self.state.storage
 
     def _handle_packet_event(self, event_type: str, data):
-        """Handle new message."""
+        """Handle new message, respecting an active search filter."""
+        if event_type == "messages_cleared":
+            self._displayed_entries.clear()
+            self._match_entries.clear()
+            self.clear()
+            return
         if event_type == "message_added" and data:
-            self._render_message(data)
+            if self._filter_active:
+                matches = self._entry_matches(data, self._search_term)
+                self._render_message(data, render=matches)
+                if matches:
+                    self._match_entries.append(data)
+                    pass
+            else:
+                self._render_message(data)
 
     def _handle_settings_change(self, event_type: str, setting: str):
         """Handle settings changes."""
@@ -63,21 +84,24 @@ class LogPanel(RichLog):
             else:
                 self._rerender_all_entries()
 
-    def _render_message(self, entry: dict):
-        """Render a message entry to the log."""
-        # Track entry for search functionality
+    def _render_message(self, entry: dict, render: bool = True):
+        """Track a message entry and optionally render it."""
         self._displayed_entries.append(entry)
+        if len(self._displayed_entries) > 5000:
+            del self._displayed_entries[: len(self._displayed_entries) - 5000]
+        if not render:
+            return
 
         # Check if user is at bottom before adding content
         should_scroll = self.is_vertical_scroll_end
 
-        packet = entry['packet']
+        packet = entry["packet"]
 
         # Check if this is a TX packet (sent by us)
-        is_tx = packet.get('_tx', False)
+        is_tx = packet.get("_tx", False)
 
         # Check if this is from a favorited node
-        from_id = packet.get('from', packet.get('fromId'))
+        from_id = packet.get("from", packet.get("fromId"))
         from_id_str = format_node_id(from_id) if from_id else None
         is_favorite = (
             self.state.settings.favorites_highlight
@@ -157,8 +181,7 @@ class LogPanel(RichLog):
         self._loading_history = True
 
         messages = self.storage.get_all_packets(
-            limit=self.HISTORY_PAGE_SIZE,
-            before_id=self._oldest_id
+            limit=self.HISTORY_PAGE_SIZE, before_id=self._oldest_id
         )
 
         if not messages:
@@ -181,6 +204,8 @@ class LogPanel(RichLog):
 
         # Prepend new entries to displayed_entries (they're older)
         self._displayed_entries = new_entries + self._displayed_entries
+        if len(self._displayed_entries) > 5000:
+            del self._displayed_entries[: len(self._displayed_entries) - 5000]
 
         # Clear and re-render all entries
         self.clear()
@@ -211,7 +236,7 @@ class LogPanel(RichLog):
     def get_total_count(self) -> Optional[int]:
         """Get total message count from database."""
         if self.storage:
-            return self.storage.get_stats().get('messages', 0)
+            return self.storage.get_stats().get("messages", 0)
         return None
 
     def is_history_exhausted(self) -> bool:
@@ -269,29 +294,29 @@ class LogPanel(RichLog):
         - Node names (shortName/longName) for from/to nodes
         - Text message content
         """
-        packet = entry.get('packet', {})
-        decoded = packet.get('decoded', {})
+        packet = entry.get("packet", {})
+        decoded = packet.get("decoded", {})
 
         # Search in node names via NodeStore (from node)
-        from_id = packet.get('from', packet.get('fromId', ''))
+        from_id = packet.get("from", packet.get("fromId", ""))
         from_name = ""
         if from_id:
             node = self.state.nodes.get_node(from_id)
             if node:
-                user = node.get('user', {})
+                user = node.get("user", {})
                 from_name = f"{user.get('shortName', '')} {user.get('longName', '')}"
 
         # Search in node names via NodeStore (to node)
-        to_id = packet.get('to', packet.get('toId', ''))
+        to_id = packet.get("to", packet.get("toId", ""))
         to_name = ""
         if to_id:
             node = self.state.nodes.get_node(to_id)
             if node:
-                user = node.get('user', {})
+                user = node.get("user", {})
                 to_name = f"{user.get('shortName', '')} {user.get('longName', '')}"
 
         # Search in text content (only for text messages)
-        text = decoded.get('text', '')
+        text = decoded.get("text", "")
 
         # Build searchable string (all lowercase for case-insensitive search)
         searchable = f"{from_name} {to_name} {text}".lower()
@@ -319,9 +344,7 @@ class LogPanel(RichLog):
             return False
 
         messages = self.storage.search_packets(
-            self._search_term,
-            limit=self.HISTORY_PAGE_SIZE,
-            before_id=self._oldest_match_id
+            self._search_term, limit=self.HISTORY_PAGE_SIZE, before_id=self._oldest_match_id
         )
 
         if not messages:
@@ -350,11 +373,11 @@ class LogPanel(RichLog):
 
     def _render_message_raw(self, entry: dict, scroll_end: bool = False):
         """Render a message entry without tracking (for re-render)."""
-        packet = entry['packet']
+        packet = entry["packet"]
 
-        is_tx = packet.get('_tx', False)
+        is_tx = packet.get("_tx", False)
 
-        from_id = packet.get('from', packet.get('fromId'))
+        from_id = packet.get("from", packet.get("fromId"))
         from_id_str = format_node_id(from_id) if from_id else None
         is_favorite = (
             self.state.settings.favorites_highlight

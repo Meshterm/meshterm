@@ -7,7 +7,7 @@ from textual.widgets import Static, Label
 from textual.binding import Binding
 from rich.text import Text
 
-from ..formatting import Colors
+from ..formatting import Colors, sanitize_text
 
 
 class MessageActionMenu(ModalScreen):
@@ -89,7 +89,7 @@ class MessageActionMenu(ModalScreen):
         title = "Your message" if self.is_own_message else f"Message from {self.sender_name}"
 
         with Container():
-            yield Label(title, classes="title")
+            yield Label(Text(sanitize_text(title)), classes="title")
             with Vertical(classes="actions-list"):
                 for i, (_, label) in enumerate(self._actions):
                     yield Static(self._format_item(i + 1, label), classes="action-item")
@@ -98,7 +98,7 @@ class MessageActionMenu(ModalScreen):
     def _format_item(self, num: int, label: str) -> Text:
         text = Text()
         text.append(f"[{num}]", style="bold bright_green")
-        text.append(f" {label}", style=Colors.TEXT)
+        text.append(f" {sanitize_text(label)}", style=Colors.TEXT)
         return text
 
     def action_pick(self, num: str):

@@ -1,38 +1,51 @@
 """Configuration panels for Settings view."""
 
 import json
+import os
+from typing import Optional
+
 from textual.app import ComposeResult
-from textual.containers import Container, VerticalScroll, Horizontal
-from textual.widgets import Static, Select, Input, Switch, Button, Label
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
+from textual.widgets import Button, Input, Label, Select, Static, Switch
 
-from ..formatting import lookup_postal_code, get_location_name
+from ..formatting import get_location_name, lookup_postal_code, sanitize_text
 from ..storage import get_data_dir
 
 
-# Region options (Meshtastic regions)
-REGION_OPTIONS = [
-    ("UNSET", 0),
-    ("US", 1),
-    ("EU_433", 2),
-    ("EU_868", 3),
-    ("CN", 4),
-    ("JP", 5),
-    ("ANZ", 6),
-    ("KR", 7),
-    ("TW", 8),
-    ("RU", 9),
-    ("IN", 10),
-    ("NZ_865", 11),
-    ("TH", 12),
-    ("LORA_24", 13),
-    ("UA_433", 14),
-    ("UA_868", 15),
-    ("MY_433", 16),
-    ("MY_919", 17),
-    ("SG_923", 18),
-]
+def _build_region_options():
+    """Build region options from the installed Meshtastic schema."""
+    try:
+        from meshtastic.protobuf import config_pb2
+
+        enum = config_pb2.Config.LoRaConfig.RegionCode
+        return [(name, enum.Value(name)) for name in enum.keys()]
+    except Exception:
+        return [
+            ("UNSET", 0),
+            ("US", 1),
+            ("EU_433", 2),
+            ("EU_868", 3),
+            ("CN", 4),
+            ("JP", 5),
+            ("ANZ", 6),
+            ("KR", 7),
+            ("TW", 8),
+            ("RU", 9),
+            ("IN", 10),
+            ("NZ_865", 11),
+            ("TH", 12),
+            ("LORA_24", 13),
+            ("UA_433", 14),
+            ("UA_868", 15),
+            ("MY_433", 16),
+            ("MY_919", 17),
+            ("SG_923", 18),
+        ]
+
+
+REGION_OPTIONS = _build_region_options()
 
 # Modem preset options
 MODEM_PRESET_OPTIONS = [
@@ -77,9 +90,9 @@ REBROADCAST_MODE_OPTIONS = [
     ("KNOWN_ONLY", 3),
 ]
 
-# Interval options for broadcast settings (human-readable)
+# Interval options; zero means the firmware default, not "disabled".
 INTERVAL_OPTIONS = [
-    ("Disabled", 0),
+    ("Default", 0),
     ("15 minutes", 900),
     ("30 minutes", 1800),
     ("1 hour", 3600),
@@ -89,8 +102,7 @@ INTERVAL_OPTIONS = [
     ("24 hours", 86400),
 ]
 
-# For settings where 0 means "use default" rather than disabled
-INTERVAL_OPTIONS_WITH_DEFAULT = [("Default", 0)] + INTERVAL_OPTIONS[1:]
+INTERVAL_OPTIONS_WITH_DEFAULT = INTERVAL_OPTIONS
 
 # Channel role options
 CHANNEL_ROLE_OPTIONS = [
@@ -144,6 +156,7 @@ class ConfigPanel(VerticalScroll):
 
     class ConfigSaved(Message):
         """Message sent when config is saved."""
+
         def __init__(self, config_type: str, success: bool, will_reboot: bool = False):
             self.config_type = config_type
             self.success = success
@@ -154,6 +167,13 @@ class ConfigPanel(VerticalScroll):
         super().__init__(**kwargs)
         self.connection = connection
         self._original_values = {}
+        self._form_snapshot = {}
+        self._config_load_failed = False
+
+    def _diff_values(self, values: dict) -> dict:
+        """Return only values that differ from the loaded form snapshot."""
+        snapshot = self._form_snapshot or self._original_values
+        return {key: value for key, value in values.items() if snapshot.get(key) != value}
 
     def load_config(self, config: dict):
         """Load configuration values into the form. Override in subclasses."""
@@ -224,56 +244,64 @@ class RadioConfigPanel(ConfigPanel):
 
     def load_config(self, config: dict):
         """Load LoRa configuration values."""
-        lora = config.get('lora', {})
+        lora = config.get("lora", {})
         if not lora:
             return
-
         self._original_values = lora.copy()
-
+        self._config_load_failed = False
         try:
-            # Region
-            region_val = lora.get('region', 0)
+            region_val = lora.get("region", 0)
             self.query_one("#region-select", Select).value = region_val
-
-            # Modem preset
-            modem_val = lora.get('modem_preset', 0)
+            modem_val = lora.get("modem_preset", 0)
             self.query_one("#modem-preset-select", Select).value = modem_val
-
-            # TX Power
-            tx_power = lora.get('tx_power', 0)
+            tx_power = lora.get("tx_power", 0)
             self.query_one("#tx-power-input", Input).value = str(tx_power)
-
-            # Hop limit
-            hop_limit = lora.get('hop_limit', 3)
+            hop_limit = lora.get("hop_limit", 3)
             self.query_one("#hop-limit-input", Input).value = str(hop_limit)
-
-            # TX enabled
-            tx_enabled = lora.get('tx_enabled', True)
+            tx_enabled = lora.get("tx_enabled", True)
             self.query_one("#tx-enabled-switch", Switch).value = tx_enabled
+            self._form_snapshot = {
+                "region": region_val,
+                "modem_preset": modem_val,
+                "tx_power": tx_power,
+                "hop_limit": hop_limit,
+                "tx_enabled": tx_enabled,
+            }
+        except Exception as exc:
+            self._config_load_failed = True
+            self.app.notify(
+                f"Could not load radio config: {exc}",
+                severity="error",
+                timeout=5,
+                markup=False,
+            )
 
-        except Exception:
-            pass
-
-    def _get_form_values(self) -> dict:
-        """Get current form values."""
-        values = {}
-
+    def _get_form_values(self) -> Optional[dict]:
+        """Get changed form values, or None when the form is invalid."""
         try:
-            values['region'] = self.query_one("#region-select", Select).value
-            values['modem_preset'] = self.query_one("#modem-preset-select", Select).value
-
-            tx_power_str = self.query_one("#tx-power-input", Input).value
-            values['tx_power'] = max(0, min(30, int(tx_power_str))) if tx_power_str else 0
-
-            hop_limit_str = self.query_one("#hop-limit-input", Input).value
-            values['hop_limit'] = max(1, min(7, int(hop_limit_str))) if hop_limit_str else 3
-
-            values['tx_enabled'] = self.query_one("#tx-enabled-switch", Switch).value
-
+            region = self.query_one("#region-select", Select).value
+            modem = self.query_one("#modem-preset-select", Select).value
+            tx_power_str = self.query_one("#tx-power-input", Input).value.strip()
+            hop_limit_str = self.query_one("#hop-limit-input", Input).value.strip()
+            tx_power = int(tx_power_str) if tx_power_str else 0
+            hop_limit = int(hop_limit_str) if hop_limit_str else 3
+            if not 0 <= tx_power <= 30:
+                raise ValueError("TX power must be between 0 and 30")
+            if not 1 <= hop_limit <= 7:
+                raise ValueError("Hop limit must be between 1 and 7")
+            values = {
+                "region": region,
+                "modem_preset": modem,
+                "tx_power": tx_power,
+                "hop_limit": hop_limit,
+                "tx_enabled": self.query_one("#tx-enabled-switch", Switch).value,
+            }
+            return values
+        except (TypeError, ValueError) as exc:
+            self.app.notify(str(exc), severity="error", timeout=3, markup=False)
+            return None
         except Exception:
-            pass
-
-        return values
+            return None
 
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button presses."""
@@ -283,22 +311,37 @@ class RadioConfigPanel(ConfigPanel):
             self._revert_config()
 
     def _save_config(self):
-        """Save LoRa config to device."""
+        """Save changed LoRa values to the device."""
+        if self._config_load_failed:
+            self.app.notify(
+                "Fix the configuration load error before saving.",
+                severity="error",
+                timeout=3,
+                markup=False,
+            )
+            return
         values = self._get_form_values()
-        will_reboot = self.connection.will_cause_reboot('lora', values)
-        success = self.connection.write_config('lora', values)
-        self.post_message(self.ConfigSaved('lora', success, will_reboot))
+        if values is None:
+            return
+        if not values:
+            self.post_message(self.ConfigSaved("lora", True, False))
+            return
+        will_reboot = self.connection.will_cause_reboot("lora", values)
+        success = self.connection.write_config("lora", values)
+        self.post_message(self.ConfigSaved("lora", success, will_reboot))
 
     def _revert_config(self):
         """Revert to original values."""
         if self._original_values:
-            self.load_config({'lora': self._original_values})
+            self.load_config({"lora": self._original_values})
 
 
 class ChannelsPanel(ConfigPanel):
     """Panel for channel configuration."""
 
-    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DEFAULT_CSS = (
+        ConfigPanel.DEFAULT_CSS
+        + """
     ChannelsPanel .channel-selector {
         height: 3;
         margin-bottom: 1;
@@ -314,6 +357,7 @@ class ChannelsPanel(ConfigPanel):
         background: $primary;
     }
     """
+    )
 
     def __init__(self, connection, **kwargs):
         super().__init__(connection, **kwargs)
@@ -384,30 +428,46 @@ class ChannelsPanel(ConfigPanel):
 
     def load_config(self, config: dict):
         """Load channel configuration."""
-        self._channels_data = config.get('channels', [])
+        self._channels_data = config.get("channels", [])
         self._load_channel(self._current_channel)
 
     def _load_channel(self, index: int):
-        """Load specific channel into form."""
+        """Load a specific channel into the form and snapshot it."""
         if index >= len(self._channels_data):
-            # No data for this channel
+            defaults = {
+                "role": 0,
+                "name": "",
+                "psk": "",
+                "uplink_enabled": False,
+                "downlink_enabled": False,
+            }
             try:
                 self.query_one("#channel-role-select", Select).value = 0
                 self.query_one("#channel-name-input", Input).value = ""
                 self.query_one("#channel-psk-input", Input).value = ""
                 self.query_one("#channel-uplink-switch", Switch).value = False
                 self.query_one("#channel-downlink-switch", Switch).value = False
+                self._form_snapshot = defaults
             except Exception:
                 pass
             return
 
         ch = self._channels_data[index]
         try:
-            self.query_one("#channel-role-select", Select).value = ch.get('role', 0)
-            self.query_one("#channel-name-input", Input).value = ch.get('name', '')
-            self.query_one("#channel-psk-input", Input).value = ch.get('psk', '')
-            self.query_one("#channel-uplink-switch", Switch).value = ch.get('uplink_enabled', False)
-            self.query_one("#channel-downlink-switch", Switch).value = ch.get('downlink_enabled', False)
+            self.query_one("#channel-role-select", Select).value = ch.get("role", 0)
+            self.query_one("#channel-name-input", Input).value = ch.get("name", "")
+            self.query_one("#channel-psk-input", Input).value = ch.get("psk", "")
+            self.query_one("#channel-uplink-switch", Switch).value = ch.get("uplink_enabled", False)
+            self.query_one("#channel-downlink-switch", Switch).value = ch.get(
+                "downlink_enabled", False
+            )
+            self._form_snapshot = {
+                "role": ch.get("role", 0),
+                "name": ch.get("name", ""),
+                "psk": ch.get("psk", ""),
+                "uplink_enabled": ch.get("uplink_enabled", False),
+                "downlink_enabled": ch.get("downlink_enabled", False),
+            }
         except Exception:
             pass
 
@@ -428,26 +488,40 @@ class ChannelsPanel(ConfigPanel):
         elif btn_id == "revert-btn":
             self._revert_config()
 
-    def _get_form_values(self) -> dict:
-        """Get current form values for current channel."""
-        values = {'index': self._current_channel}
-
+    def _get_form_values(self) -> Optional[dict]:
+        """Get only changed values for the current channel."""
         try:
-            values['role'] = self.query_one("#channel-role-select", Select).value
-            values['name'] = self.query_one("#channel-name-input", Input).value
-            values['psk'] = self.query_one("#channel-psk-input", Input).value
-            values['uplink_enabled'] = self.query_one("#channel-uplink-switch", Switch).value
-            values['downlink_enabled'] = self.query_one("#channel-downlink-switch", Switch).value
+            if not 0 <= self._current_channel <= 7:
+                return None
+            values = {
+                "index": self._current_channel,
+                "role": self.query_one("#channel-role-select", Select).value,
+                "name": self.query_one("#channel-name-input", Input).value,
+                "psk": self.query_one("#channel-psk-input", Input).value,
+                "uplink_enabled": self.query_one("#channel-uplink-switch", Switch).value,
+                "downlink_enabled": self.query_one("#channel-downlink-switch", Switch).value,
+            }
+            changed = {
+                k: v for k, v in values.items() if k != "index" and self._form_snapshot.get(k) != v
+            }
+            return {"index": self._current_channel, **changed} if changed else {}
         except Exception:
-            pass
-
-        return values
+            return None
 
     def _save_config(self):
-        """Save current channel config to device."""
+        """Save changed channel values and refresh the cached snapshot."""
         values = self._get_form_values()
+        if values is None:
+            return
+        if not values:
+            self.post_message(self.ConfigSaved("channel", True))
+            return
         success = self.connection.write_channel(self._current_channel, values)
-        self.post_message(self.ConfigSaved('channel', success))
+        if success:
+            config = self.connection.get_local_config()
+            if config:
+                self.load_config(config)
+        self.post_message(self.ConfigSaved("channel", success))
 
     def _revert_config(self):
         """Revert to original values."""
@@ -457,7 +531,9 @@ class ChannelsPanel(ConfigPanel):
 class PositionPanel(ConfigPanel):
     """Panel for GPS/position settings."""
 
-    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DEFAULT_CSS = (
+        ConfigPanel.DEFAULT_CSS
+        + """
     PositionPanel .section-header {
         margin-top: 1;
         margin-bottom: 1;
@@ -470,6 +546,7 @@ class PositionPanel(ConfigPanel):
         color: $success;
     }
     """
+    )
 
     def __init__(self, connection, state=None, **kwargs):
         super().__init__(connection, **kwargs)
@@ -541,7 +618,9 @@ class PositionPanel(ConfigPanel):
 
         # Buttons for location
         with Horizontal(classes="button-row"):
-            yield Button("Look Up & Save", variant="success", id="lookup-btn", classes="save-button")
+            yield Button(
+                "Look Up & Save", variant="success", id="lookup-btn", classes="save-button"
+            )
             yield Button("Clear", variant="default", id="clear-location-btn")
 
     def on_mount(self):
@@ -573,57 +652,61 @@ class PositionPanel(ConfigPanel):
         if seconds == 0:
             return 0
         # Find the closest option
-        closest = min(options, key=lambda x: abs(x[1] - seconds) if x[1] > 0 else float('inf'))
+        closest = min(options, key=lambda x: abs(x[1] - seconds) if x[1] > 0 else float("inf"))
         return closest[1]
 
     def load_config(self, config: dict):
         """Load position configuration."""
-        pos = config.get('position', {})
+        pos = config.get("position", {})
         if not pos:
             return
-
         self._original_values = pos.copy()
-
+        self._config_load_failed = False
         try:
-            gps_mode = pos.get('gps_mode', 0)
+            gps_mode = pos.get("gps_mode", 0)
             self.query_one("#gps-mode-select", Select).value = gps_mode
-
-            # Position broadcast interval (map to nearest dropdown option)
-            broadcast_secs = pos.get('position_broadcast_secs', 0)
+            broadcast_secs = pos.get("position_broadcast_secs", 0)
             nearest_broadcast = self._find_nearest_interval(broadcast_secs, INTERVAL_OPTIONS)
             self.query_one("#pos-broadcast-select", Select).value = nearest_broadcast
-
-            fixed_pos = pos.get('fixed_position', False)
+            fixed_pos = pos.get("fixed_position", False)
             self.query_one("#fixed-pos-switch", Switch).value = fixed_pos
+            self._form_snapshot = {
+                "gps_mode": gps_mode,
+                "position_broadcast_secs": nearest_broadcast,
+                "fixed_position": fixed_pos,
+            }
+        except Exception as exc:
+            self._config_load_failed = True
+            self.app.notify(
+                f"Could not load position config: {exc}",
+                severity="error",
+                timeout=5,
+                markup=False,
+            )
 
-        except Exception:
-            pass
-
-        # Load app settings
         if self.state:
             try:
                 self.query_one("#use-gps-switch", Switch).value = self.state.settings.use_gps
                 if self.state.settings.manual_location_label:
-                    # Try to extract postal code from label
-                    self.query_one("#postal-code-input", Input).value = self.state.settings.manual_location_label
+                    self.query_one("#postal-code-input", Input).value = (
+                        self.state.settings.manual_location_label
+                    )
             except Exception:
                 pass
 
         self._update_location_status()
 
-    def _get_form_values(self) -> dict:
-        """Get current form values."""
-        values = {}
-
+    def _get_form_values(self) -> Optional[dict]:
+        """Get changed position values, or None when the form is invalid."""
         try:
-            values['gps_mode'] = self.query_one("#gps-mode-select", Select).value
-            values['position_broadcast_secs'] = self.query_one("#pos-broadcast-select", Select).value
-            values['fixed_position'] = self.query_one("#fixed-pos-switch", Switch).value
-
+            values = {
+                "gps_mode": self.query_one("#gps-mode-select", Select).value,
+                "position_broadcast_secs": self.query_one("#pos-broadcast-select", Select).value,
+                "fixed_position": self.query_one("#fixed-pos-switch", Switch).value,
+            }
+            return self._diff_values(values)
         except Exception:
-            pass
-
-        return values
+            return None
 
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button presses."""
@@ -642,27 +725,48 @@ class PositionPanel(ConfigPanel):
             self.state.settings.set_use_gps(event.value)
 
     def _lookup_location(self):
-        """Look up postal code and save location."""
+        """Look up postal code off the UI thread."""
+        postal_code = self.query_one("#postal-code-input", Input).value.strip()
+        country = self.query_one("#country-input", Input).value.strip().upper() or "US"
+        if not postal_code:
+            self.app.notify("Enter a postal code", severity="warning", timeout=2)
+            return
+        self.app.notify("Looking up postal code...", timeout=2)
+        self.run_worker(
+            lambda: self._do_lookup(postal_code, country),
+            thread=True,
+            exclusive=True,
+        )
+
+    def _do_lookup(self, postal_code: str, country: str):
         try:
-            postal_code = self.query_one("#postal-code-input", Input).value.strip()
-            country = self.query_one("#country-input", Input).value.strip().upper() or "US"
-
-            if not postal_code:
-                self.app.notify("Enter a postal code", severity="warning", timeout=2)
-                return
-
             coords = lookup_postal_code(postal_code, country)
-            if coords:
-                lat, lon = coords
-                if self.state:
-                    self.state.settings.set_manual_location(lat, lon, postal_code)
-                    self._update_location_status()
-                    self.app.notify(f"Location set: {lat:.4f}, {lon:.4f}", timeout=2)
-            else:
-                self.app.notify(f"Could not find postal code: {postal_code}", severity="error", timeout=3)
+        except Exception as exc:
+            coords = None
+            self.app.call_from_thread(
+                self.app.notify,
+                f"Lookup failed: {exc}",
+                severity="error",
+                timeout=3,
+                markup=False,
+            )
+            return
+        self.app.call_from_thread(self._apply_lookup, coords, postal_code)
 
-        except Exception as e:
-            self.app.notify(f"Lookup failed: {e}", severity="error", timeout=3)
+    def _apply_lookup(self, coords, postal_code: str):
+        if coords:
+            lat, lon = coords
+            if self.state:
+                self.state.settings.set_manual_location(lat, lon, postal_code)
+                self._update_location_status()
+                self.app.notify(f"Location set: {lat:.4f}, {lon:.4f}", timeout=2)
+        else:
+            self.app.notify(
+                f"Could not find postal code: {sanitize_text(postal_code)}",
+                severity="error",
+                timeout=3,
+                markup=False,
+            )
 
     def _clear_location(self):
         """Clear manual location."""
@@ -672,22 +776,37 @@ class PositionPanel(ConfigPanel):
             self.app.notify("Manual location cleared", timeout=2)
 
     def _save_config(self):
-        """Save position config to device."""
+        """Save changed position values to the device."""
+        if self._config_load_failed:
+            self.app.notify(
+                "Fix the configuration load error before saving.",
+                severity="error",
+                timeout=3,
+                markup=False,
+            )
+            return
         values = self._get_form_values()
-        will_reboot = self.connection.will_cause_reboot('position', values)
-        success = self.connection.write_config('position', values)
-        self.post_message(self.ConfigSaved('position', success, will_reboot))
+        if values is None:
+            return
+        if not values:
+            self.post_message(self.ConfigSaved("position", True, False))
+            return
+        will_reboot = self.connection.will_cause_reboot("position", values)
+        success = self.connection.write_config("position", values)
+        self.post_message(self.ConfigSaved("position", success, will_reboot))
 
     def _revert_config(self):
         """Revert to original values."""
         if self._original_values:
-            self.load_config({'position': self._original_values})
+            self.load_config({"position": self._original_values})
 
 
 class DevicePanel(ConfigPanel):
     """Panel for device role settings."""
 
-    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DEFAULT_CSS = (
+        ConfigPanel.DEFAULT_CSS
+        + """
     DevicePanel .section-header {
         margin-top: 1;
         margin-bottom: 1;
@@ -695,6 +814,7 @@ class DevicePanel(ConfigPanel):
         color: $text;
     }
     """
+    )
 
     def compose(self) -> ComposeResult:
         # Long name
@@ -769,70 +889,86 @@ class DevicePanel(ConfigPanel):
         if seconds == 0:
             return 0
         # Find the closest option
-        closest = min(options, key=lambda x: abs(x[1] - seconds) if x[1] > 0 else float('inf'))
+        closest = min(options, key=lambda x: abs(x[1] - seconds) if x[1] > 0 else float("inf"))
         return closest[1]
 
     def load_config(self, config: dict):
         """Load device configuration."""
-        dev = config.get('device', {})
-        user = config.get('user', {})
-        telemetry = config.get('telemetry', {})
-
+        dev = config.get("device", {})
+        user = config.get("user", {})
+        telemetry = config.get("telemetry", {})
         self._original_values = {
-            'device': dev.copy() if dev else {},
-            'user': user.copy() if user else {},
-            'telemetry': telemetry.copy() if telemetry else {},
+            "device": dev.copy() if dev else {},
+            "user": user.copy() if user else {},
+            "telemetry": telemetry.copy() if telemetry else {},
         }
-
+        self._config_load_failed = False
         try:
-            # User/owner names
-            long_name = user.get('long_name', '')
+            long_name = user.get("long_name", "")
             self.query_one("#long-name-input", Input).value = long_name
-
-            short_name = user.get('short_name', '')
+            short_name = user.get("short_name", "")
             self.query_one("#short-name-input", Input).value = short_name
-
-            # Device settings
-            role = dev.get('role', 0)
+            role = dev.get("role", 0)
             self.query_one("#device-role-select", Select).value = role
-
-            rebroadcast = dev.get('rebroadcast_mode', 0)
+            rebroadcast = dev.get("rebroadcast_mode", 0)
             self.query_one("#rebroadcast-mode-select", Select).value = rebroadcast
-
-            # NodeInfo interval (map to nearest dropdown option)
-            nodeinfo_secs = dev.get('node_info_broadcast_secs', 0)
-            nearest_nodeinfo = self._find_nearest_interval(nodeinfo_secs, INTERVAL_OPTIONS_WITH_DEFAULT)
+            nodeinfo_secs = dev.get("node_info_broadcast_secs", 0)
+            nearest_nodeinfo = self._find_nearest_interval(
+                nodeinfo_secs, INTERVAL_OPTIONS_WITH_DEFAULT
+            )
             self.query_one("#nodeinfo-broadcast-select", Select).value = nearest_nodeinfo
-
-            # Telemetry interval
-            telemetry_secs = telemetry.get('device_update_interval', 0)
+            telemetry_secs = telemetry.get("device_update_interval", 0)
             nearest_telemetry = self._find_nearest_interval(telemetry_secs, INTERVAL_OPTIONS)
             self.query_one("#telemetry-interval-select", Select).value = nearest_telemetry
+            self._form_snapshot = {
+                "user": {"long_name": long_name, "short_name": short_name},
+                "device": {
+                    "role": role,
+                    "rebroadcast_mode": rebroadcast,
+                    "node_info_broadcast_secs": nearest_nodeinfo,
+                },
+                "telemetry": {"device_update_interval": nearest_telemetry},
+            }
+        except Exception as exc:
+            self._config_load_failed = True
+            self.app.notify(
+                f"Could not load device config: {exc}",
+                severity="error",
+                timeout=5,
+                markup=False,
+            )
 
-        except Exception:
-            pass
-
-    def _get_form_values(self) -> dict:
-        """Get current form values."""
-        values = {'device': {}, 'user': {}, 'telemetry': {}}
-
+    def _get_form_values(self) -> Optional[dict]:
+        """Get only changed device, telemetry, and owner values."""
         try:
-            # User/owner names
-            values['user']['long_name'] = self.query_one("#long-name-input", Input).value
-            values['user']['short_name'] = self.query_one("#short-name-input", Input).value
-
-            # Device settings
-            values['device']['role'] = self.query_one("#device-role-select", Select).value
-            values['device']['rebroadcast_mode'] = self.query_one("#rebroadcast-mode-select", Select).value
-            values['device']['node_info_broadcast_secs'] = self.query_one("#nodeinfo-broadcast-select", Select).value
-
-            # Telemetry settings
-            values['telemetry']['device_update_interval'] = self.query_one("#telemetry-interval-select", Select).value
-
+            snapshot = self._form_snapshot or self._original_values
+            user = {
+                "long_name": self.query_one("#long-name-input", Input).value.strip(),
+                "short_name": self.query_one("#short-name-input", Input).value.strip(),
+            }
+            device = {
+                "role": self.query_one("#device-role-select", Select).value,
+                "rebroadcast_mode": self.query_one("#rebroadcast-mode-select", Select).value,
+                "node_info_broadcast_secs": self.query_one(
+                    "#nodeinfo-broadcast-select", Select
+                ).value,
+            }
+            telemetry = {
+                "device_update_interval": self.query_one(
+                    "#telemetry-interval-select", Select
+                ).value,
+            }
+            return {
+                "user": {k: v for k, v in user.items() if snapshot.get("user", {}).get(k) != v},
+                "device": {
+                    k: v for k, v in device.items() if snapshot.get("device", {}).get(k) != v
+                },
+                "telemetry": {
+                    k: v for k, v in telemetry.items() if snapshot.get("telemetry", {}).get(k) != v
+                },
+            }
         except Exception:
-            pass
-
-        return values
+            return None
 
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button presses."""
@@ -842,43 +978,51 @@ class DevicePanel(ConfigPanel):
             self._revert_config()
 
     def _save_config(self):
-        """Save device config, telemetry config, and owner names."""
-        values = self._get_form_values()
-
-        # Check if device config will cause reboot
-        device_values = values.get('device', {})
-        will_reboot = self.connection.will_cause_reboot('device', device_values)
-
-        # Save device config
-        device_success = self.connection.write_config('device', device_values)
-
-        # Save telemetry module config
-        telemetry_values = values.get('telemetry', {})
-        telemetry_success = self.connection.write_module_config('telemetry', telemetry_values)
-
-        # Save owner names if provided
-        user_values = values.get('user', {})
-        long_name = user_values.get('long_name', '').strip()
-        short_name = user_values.get('short_name', '').strip()
-
-        owner_success = True
-        if long_name or short_name:
-            owner_success = self.connection.write_owner(
-                long_name=long_name if long_name else None,
-                short_name=short_name if short_name else None
+        """Save changed device, telemetry, and owner values."""
+        if self._config_load_failed:
+            self.app.notify(
+                "Fix the configuration load error before saving.",
+                severity="error",
+                timeout=3,
+                markup=False,
             )
+            return
+        values = self._get_form_values()
+        if values is None:
+            return
+        device_values = values.get("device", {})
+        telemetry_values = values.get("telemetry", {})
+        user_values = values.get("user", {})
+        if not device_values and not telemetry_values and not user_values:
+            self.post_message(self.ConfigSaved("device", True, False))
+            return
 
+        will_reboot = self.connection.will_cause_reboot("device", device_values)
+        device_success = True
+        if device_values:
+            device_success = self.connection.write_config("device", device_values)
+        telemetry_success = True
+        if telemetry_values:
+            telemetry_success = self.connection.write_module_config("telemetry", telemetry_values)
+        owner_success = True
+        if user_values:
+            owner_success = self.connection.write_owner(
+                long_name=user_values.get("long_name"),
+                short_name=user_values.get("short_name"),
+            )
         success = device_success and owner_success and telemetry_success
-        self.post_message(self.ConfigSaved('device', success, will_reboot))
+        self.post_message(self.ConfigSaved("device", success, will_reboot))
 
     def _revert_config(self):
         """Revert to original values."""
         if self._original_values:
-            self.load_config({
-                'device': self._original_values.get('device', {}),
-                'user': self._original_values.get('user', {}),
-                'telemetry': self._original_values.get('telemetry', {}),
-            })
+            self.load_config(
+                {
+                    "device": self._original_values.get("device", {}),
+                    "user": self._original_values.get("user", {}),
+                    "telemetry": self._original_values.get("telemetry", {}),
+                }
+            )
 
 
 class ConfirmDialog(ModalScreen):
@@ -928,7 +1072,7 @@ class ConfirmDialog(ModalScreen):
         message: str,
         confirm_text: str = "CONFIRM",
         action_name: str = "confirm",
-        **kwargs
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.title_text = title
@@ -966,7 +1110,9 @@ class ConfirmDialog(ModalScreen):
 class AdvancedPanel(ConfigPanel):
     """Panel for advanced/dangerous device operations."""
 
-    DEFAULT_CSS = ConfigPanel.DEFAULT_CSS + """
+    DEFAULT_CSS = (
+        ConfigPanel.DEFAULT_CSS
+        + """
     AdvancedPanel .section-header {
         margin-top: 1;
         margin-bottom: 1;
@@ -1007,6 +1153,7 @@ class AdvancedPanel(ConfigPanel):
         margin-right: 2;
     }
     """
+    )
 
     def __init__(self, connection, state=None, **kwargs):
         super().__init__(connection, **kwargs)
@@ -1019,7 +1166,10 @@ class AdvancedPanel(ConfigPanel):
 
         # Config backup/restore
         yield Static("Configuration Backup", classes="section-header")
-        yield Static("Export saves device settings to a JSON file. Import restores them.", classes="description")
+        yield Static(
+            "Export saves device settings to a JSON file. Import restores them.",
+            classes="description",
+        )
         with Horizontal(classes="action-row"):
             yield Button("Export Config", variant="primary", id="export-btn", classes="action-btn")
             yield Button("Import Config", variant="primary", id="import-btn", classes="action-btn")
@@ -1032,9 +1182,14 @@ class AdvancedPanel(ConfigPanel):
 
         # Local data clearing
         yield Static("Clear Local Data", classes="warning-header")
-        yield Static("Clears meshterm's local message history and logs (not device data).", classes="description")
+        yield Static(
+            "Clears meshterm's local message history and logs (not device data).",
+            classes="description",
+        )
         with Horizontal(classes="action-row"):
-            yield Button("Clear Messages", variant="error", id="clear-messages-btn", classes="danger-btn")
+            yield Button(
+                "Clear Messages", variant="error", id="clear-messages-btn", classes="danger-btn"
+            )
             yield Button("Clear Logs", variant="error", id="clear-logs-btn", classes="danger-btn")
 
         # Dangerous operations
@@ -1101,11 +1256,13 @@ class AdvancedPanel(ConfigPanel):
         # Save to file
         export_path = get_data_dir() / "meshterm_config.json"
         try:
-            with open(export_path, 'w') as f:
+            fd = os.open(str(export_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
                 json.dump(config, f, indent=2)
+            os.chmod(export_path, 0o600)
             self.app.notify(f"Config exported to {export_path}", timeout=3)
         except Exception as e:
-            self.app.notify(f"Failed to save: {e}", severity="error", timeout=3)
+            self.app.notify(f"Failed to save: {e}", severity="error", timeout=3, markup=False)
 
     def _import_config(self):
         """Import device configuration from JSON file."""
@@ -1120,7 +1277,7 @@ class AdvancedPanel(ConfigPanel):
                 return
 
             try:
-                with open(import_path, 'r') as f:
+                with open(import_path, "r") as f:
                     config = json.load(f)
 
                 success, errors, message = self.connection.import_config(config)
@@ -1140,13 +1297,14 @@ class AdvancedPanel(ConfigPanel):
                 "Import Configuration",
                 "This will overwrite current device settings with the backup.",
                 confirm_text="IMPORT",
-                action_name="Import"
+                action_name="Import",
             ),
-            do_import
+            do_import,
         )
 
     def _reboot_device(self):
         """Reboot the device."""
+
         def do_reboot(confirmed: bool):
             if not confirmed:
                 return
@@ -1159,13 +1317,14 @@ class AdvancedPanel(ConfigPanel):
                 "Reboot Device",
                 "The device will restart. Connection will be lost temporarily.",
                 confirm_text="REBOOT",
-                action_name="Reboot"
+                action_name="Reboot",
             ),
-            do_reboot
+            do_reboot,
         )
 
     def _nodedb_reset(self):
         """Reset device's node database."""
+
         def do_reset(confirmed: bool):
             if not confirmed:
                 return
@@ -1178,18 +1337,20 @@ class AdvancedPanel(ConfigPanel):
                 "Reset Node Database",
                 "This will clear the device's list of known nodes.\nYour identity and settings are preserved.",
                 confirm_text="NODEDB",
-                action_name="Reset"
+                action_name="Reset",
             ),
-            do_reset
+            do_reset,
         )
 
     def _clear_messages(self):
         """Clear local message history."""
+
         def do_clear(confirmed: bool):
             if not confirmed:
                 return
             if self.state and self.state.storage:
                 result = self.state.storage.clear_messages()
+                self.state.messages.clear()
                 self.app.notify(f"Cleared {result} messages", timeout=3)
                 self._update_stats()
             else:
@@ -1200,13 +1361,14 @@ class AdvancedPanel(ConfigPanel):
                 "Clear Message History",
                 "This will delete all locally stored messages.\nDevice data is not affected.",
                 confirm_text="CLEAR",
-                action_name="Clear"
+                action_name="Clear",
             ),
-            do_clear
+            do_clear,
         )
 
     def _clear_logs(self):
         """Clear log files."""
+
         def do_clear(confirmed: bool):
             if not confirmed:
                 return
@@ -1222,13 +1384,14 @@ class AdvancedPanel(ConfigPanel):
                 "Clear Log Files",
                 "This will delete all meshterm log files.",
                 confirm_text="LOGS",
-                action_name="Clear"
+                action_name="Clear",
             ),
-            do_clear
+            do_clear,
         )
 
     def _factory_reset(self):
         """Factory reset the device."""
+
         def do_reset(confirmed: bool):
             if not confirmed:
                 return
@@ -1246,13 +1409,14 @@ class AdvancedPanel(ConfigPanel):
                 "• Require complete reconfiguration\n\n"
                 "Consider exporting your config first!",
                 confirm_text="FACTORY",
-                action_name="Reset"
+                action_name="Reset",
             ),
-            do_reset
+            do_reset,
         )
 
     def _total_reset(self):
         """Factory reset device AND clear local data."""
+
         def do_reset(confirmed: bool):
             if not confirmed:
                 return
@@ -1261,6 +1425,7 @@ class AdvancedPanel(ConfigPanel):
             if self.state:
                 if self.state.storage:
                     self.state.storage.clear_all_data()
+                self.state.messages.clear()
                 if self.state.text_logger:
                     self.state.text_logger.clear_logs()
 
@@ -1283,7 +1448,7 @@ class AdvancedPanel(ConfigPanel):
                 "Your device will have a completely new identity\n"
                 "and all local data will be erased.",
                 confirm_text="TOTAL",
-                action_name="Reset"
+                action_name="Reset",
             ),
-            do_reset
+            do_reset,
         )

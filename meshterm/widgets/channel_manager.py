@@ -10,7 +10,7 @@ from textual.message import Message
 from rich.text import Text
 
 from ..state import AppState
-from ..formatting import Colors
+from ..formatting import Colors, sanitize_text
 
 
 class ChannelManager(ModalScreen):
@@ -109,6 +109,7 @@ class ChannelManager(ModalScreen):
 
     class DMOpened(Message):
         """Posted when a DM is opened."""
+
         def __init__(self, node_id: str, node_name: str):
             self.node_id = node_id
             self.node_name = node_name
@@ -116,18 +117,21 @@ class ChannelManager(ModalScreen):
 
     class ChannelSelected(Message):
         """Posted when a channel is selected."""
+
         def __init__(self, channel: int):
             self.channel = channel
             super().__init__()
 
     class DMSelected(Message):
         """Posted when a DM is selected."""
+
         def __init__(self, node_id: str):
             self.node_id = node_id
             super().__init__()
 
     class DMClosed(Message):
         """Posted when a DM is closed."""
+
         def __init__(self, node_id: str):
             self.node_id = node_id
             super().__init__()
@@ -137,6 +141,20 @@ class ChannelManager(ModalScreen):
         self.state = state
         self._current_section = "channels"  # channels, dms, search
         self._search_results = []
+        self._item_node_ids = {}
+
+    def _item_id(self, prefix: str, node_id: str) -> str:
+        """Build a Textual-safe item id and remember the original node id."""
+        safe = str(node_id).lstrip("!")
+        item_id = f"{prefix}-{safe}"
+        self._item_node_ids[item_id] = node_id
+        return item_id
+
+    def _node_id_from_item(self, item_id: str, prefix_len: int) -> str:
+        node_id = self._item_node_ids.get(item_id)
+        if node_id is not None:
+            return node_id
+        return "!" + item_id[prefix_len:]
 
     def compose(self) -> ComposeResult:
         with Container(id="manager-container"):
@@ -156,7 +174,7 @@ class ChannelManager(ModalScreen):
                 with ListView(id="dm-list"):
                     for dm in self.state.open_dms.get_open_dms():
                         item_text = self._format_dm_item(dm.node_id, dm.node_name)
-                        yield ListItem(Label(item_text), id=f"dm-{dm.node_id}")
+                        yield ListItem(Label(item_text), id=self._item_id("dm", dm.node_id))
 
                 # New DM section
                 with Container(id="node-search-container"):
@@ -172,7 +190,7 @@ class ChannelManager(ModalScreen):
         text = Text()
         text.append(f"[{index}] ", style="bold bright_green")
         if name:
-            text.append(name, style="bright_cyan")
+            text.append(sanitize_text(name), style="bright_cyan")
         else:
             text.append("Primary" if index == 0 else "(unnamed)", style=Colors.DIM)
         return text
@@ -181,8 +199,8 @@ class ChannelManager(ModalScreen):
         """Format a DM list item."""
         text = Text()
         text.append("@ ", style="bold bright_magenta")
-        text.append(node_name or node_id[-4:], style="bright_cyan")
-        text.append(f" ({node_id})", style=Colors.DIM)
+        text.append(sanitize_text(node_name or node_id[-4:]), style="bright_cyan")
+        text.append(f" ({sanitize_text(node_id)})", style=Colors.DIM)
 
         # Show notification count if any
         count = self.state.open_dms.get_notification_count(node_id)
@@ -194,18 +212,18 @@ class ChannelManager(ModalScreen):
     def _format_node_result(self, node_id: str, node: dict) -> Text:
         """Format a node search result."""
         text = Text()
-        user = node.get('user', {})
-        name = user.get('shortName') or user.get('longName') or node_id[-4:]
+        user = node.get("user", {})
+        name = sanitize_text(user.get("shortName") or user.get("longName") or node_id[-4:])
 
         # Already open indicator
         if self.state.open_dms.is_dm_open(node_id):
             text.append("[open] ", style="dim")
 
         text.append(name, style="bright_cyan")
-        text.append(f" ({node_id})", style=Colors.DIM)
+        text.append(f" ({sanitize_text(node_id)})", style=Colors.DIM)
 
         # PKI status
-        has_key = node.get('has_public_key') or bool(user.get('publicKey'))
+        has_key = node.get("has_public_key") or bool(user.get("publicKey"))
         if has_key:
             text.append(" [*]", style="bright_green")
         else:
@@ -236,9 +254,9 @@ class ChannelManager(ModalScreen):
             if node_id == my_node_id:
                 continue
 
-            user = node.get('user', {})
-            short_name = (user.get('shortName') or '').lower()
-            long_name = (user.get('longName') or '').lower()
+            user = node.get("user", {})
+            short_name = (user.get("shortName") or "").lower()
+            long_name = (user.get("longName") or "").lower()
             node_id_lower = node_id.lower()
 
             if query in short_name or query in long_name or query in node_id_lower:
@@ -251,7 +269,7 @@ class ChannelManager(ModalScreen):
             results_list.add_class("visible")
             for node_id, node in self._search_results:
                 item_text = self._format_node_result(node_id, node)
-                results_list.append(ListItem(Label(item_text), id=f"node-{node_id}"))
+                results_list.append(ListItem(Label(item_text), id=self._item_id("node", node_id)))
         else:
             results_list.remove_class("visible")
 
@@ -267,27 +285,27 @@ class ChannelManager(ModalScreen):
             self.dismiss(("channel", channel))
         elif item_id.startswith("dm-"):
             # Existing DM selected
-            node_id = item_id[3:]  # Remove "dm-" prefix
+            node_id = self._node_id_from_item(item_id, 3)
             self.dismiss(("dm", node_id))
         elif item_id.startswith("node-"):
             # New DM from search
-            node_id = item_id[5:]  # Remove "node-" prefix
+            node_id = self._node_id_from_item(item_id, 5)
             self._open_new_dm(node_id)
 
     def _open_new_dm(self, node_id: str):
         """Open a new DM with the given node."""
         node = self.state.nodes.get_node(node_id)
         if node:
-            user = node.get('user', {})
-            node_name = user.get('shortName') or user.get('longName') or node_id[-4:]
+            user = node.get("user", {})
+            node_name = user.get("shortName") or user.get("longName") or node_id[-4:]
 
             # Check PKI status
-            has_key = node.get('has_public_key') or bool(user.get('publicKey'))
+            has_key = node.get("has_public_key") or bool(user.get("publicKey"))
             if not has_key:
                 self.app.notify(
                     "Warning: No PKI key exchange yet. Messages may not be secure.",
                     severity="warning",
-                    timeout=3
+                    timeout=3,
                 )
         else:
             node_name = node_id[-4:]
@@ -306,7 +324,7 @@ class ChannelManager(ModalScreen):
         if dm_list.highlighted_child:
             item_id = dm_list.highlighted_child.id
             if item_id and item_id.startswith("dm-"):
-                node_id = item_id[3:]
+                node_id = self._node_id_from_item(item_id, 3)
                 self.state.open_dms.close_dm(node_id)
                 # Refresh the DM list
                 self._refresh_dm_list()
@@ -318,7 +336,7 @@ class ChannelManager(ModalScreen):
         dm_list.clear()
         for dm in self.state.open_dms.get_open_dms():
             item_text = self._format_dm_item(dm.node_id, dm.node_name)
-            dm_list.append(ListItem(Label(item_text), id=f"dm-{dm.node_id}"))
+            dm_list.append(ListItem(Label(item_text), id=self._item_id("dm", dm.node_id)))
 
     def action_select_item(self):
         """Select the currently highlighted item."""

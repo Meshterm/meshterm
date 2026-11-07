@@ -143,9 +143,9 @@ class TestStorageSearch:
     def test_search_by_node_name(self, storage_with_data):
         """search_packets should find messages by node name."""
         # Store a node with a specific name
-        storage_with_data.store_node("!12345678", {
-            "user": {"shortName": "CAT", "longName": "Cat Node"}
-        })
+        storage_with_data.store_node(
+            "!12345678", {"user": {"shortName": "CAT", "longName": "Cat Node"}}
+        )
 
         # Search by the node name
         results = storage_with_data.search_packets("Cat")
@@ -156,9 +156,9 @@ class TestStorageSearch:
     def test_count_search_by_node_name(self, storage_with_data):
         """count_search_results should include packets matching node names."""
         # Store a node with a specific name
-        storage_with_data.store_node("!aabbccdd", {
-            "user": {"shortName": "DOG", "longName": "Dog Node"}
-        })
+        storage_with_data.store_node(
+            "!aabbccdd", {"user": {"shortName": "DOG", "longName": "Dog Node"}}
+        )
 
         # Count should include packets from/to that node
         count = storage_with_data.count_search_results("Dog")

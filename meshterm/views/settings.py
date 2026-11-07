@@ -8,7 +8,12 @@ from textual.binding import Binding
 from ..state import AppState
 from ..connection import MeshtasticConnection
 from ..widgets.config_panels import (
-    RadioConfigPanel, ChannelsPanel, PositionPanel, DevicePanel, AdvancedPanel, ConfigPanel
+    RadioConfigPanel,
+    ChannelsPanel,
+    PositionPanel,
+    DevicePanel,
+    AdvancedPanel,
+    ConfigPanel,
 )
 from ..widgets.reconnecting_modal import ReconnectingModal
 
@@ -63,7 +68,9 @@ class SettingsView(Container):
             yield ChannelsPanel(self.connection, classes="config-panel", id="channels")
             yield PositionPanel(self.connection, state=self.state, classes="config-panel", id="gps")
             yield DevicePanel(self.connection, classes="config-panel", id="device")
-            yield AdvancedPanel(self.connection, state=self.state, classes="config-panel", id="advanced")
+            yield AdvancedPanel(
+                self.connection, state=self.state, classes="config-panel", id="advanced"
+            )
 
     def action_switch_subtab(self, subtab: str):
         """Switch to a different sub-tab."""
@@ -73,6 +80,7 @@ class SettingsView(Container):
         # Update header bar
         try:
             from ..widgets.header_bar import HeaderBar
+
             header = self.app.query_one("#header-bar", HeaderBar)
             header.set_active_subtab(subtab)
         except Exception:
@@ -116,7 +124,9 @@ class SettingsView(Container):
     def on_config_panel_config_saved(self, event: ConfigPanel.ConfigSaved):
         """Handle config saved events from panels."""
         if not event.success:
-            self.app.notify(f"Failed to save {event.config_type} config", severity="error", timeout=3)
+            self.app.notify(
+                f"Failed to save {event.config_type} config", severity="error", timeout=3
+            )
             return
 
         if event.will_reboot:
@@ -129,16 +139,16 @@ class SettingsView(Container):
         """Show reconnecting modal after a reboot-causing config change."""
         # Mark this as an intentional disconnect to prevent the app from
         # showing its own reconnect modal
-        if hasattr(self.app, '_intentional_disconnect'):
+        if hasattr(self.app, "_intentional_disconnect"):
             self.app._intentional_disconnect = True
-        if hasattr(self.app, '_reconnect_modal_showing'):
+        if hasattr(self.app, "_reconnect_modal_showing"):
             self.app._reconnect_modal_showing = True
 
         def on_reconnect_result(success: bool):
             # Reset flags
-            if hasattr(self.app, '_intentional_disconnect'):
+            if hasattr(self.app, "_intentional_disconnect"):
                 self.app._intentional_disconnect = False
-            if hasattr(self.app, '_reconnect_modal_showing'):
+            if hasattr(self.app, "_reconnect_modal_showing"):
                 self.app._reconnect_modal_showing = False
 
             if success:
@@ -146,11 +156,9 @@ class SettingsView(Container):
                 # Reload config after reconnection
                 self._load_config()
             else:
-                self.app.notify("Device disconnected. Reconnect manually.", severity="warning", timeout=5)
+                self.app.notify(
+                    "Device disconnected. Reconnect manually.", severity="warning", timeout=5
+                )
 
-        modal = ReconnectingModal(
-            self.connection,
-            reason="reboot",
-            port=self.connection.port
-        )
+        modal = ReconnectingModal(self.connection, reason="reboot", port=self.connection.port)
         self.app.push_screen(modal, on_reconnect_result)

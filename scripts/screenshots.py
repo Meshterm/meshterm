@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 from meshterm.app import MeshtermApp
 from meshterm.connection import MeshtasticConnection
-from meshterm.state import AppState
+from meshterm.state import AppState, Settings
 from meshterm.storage import LogStorage
 
 SCREENSHOT_SIZE = (120, 36)
@@ -229,83 +229,106 @@ def build_packets():
         packets.append(pkt)
 
     # --- DM ---
-    packets.append({
-        "id": 2050,
-        "from": 0xD4E5F6A7,
-        "to": MY_NODE_NUM,
-        "channel": 0,
-        "decoded": {
-            "portnum": "TEXT_MESSAGE_APP",
-            "text": "Hey, can you check the repeater config on node MTRL?",
-        },
-        "rxSnr": 5.0,
-        "rxRssi": -95,
-        "hopLimit": 2,
-        "hopStart": 3,
-        "rxTime": t - 180,
-    })
+    packets.append(
+        {
+            "id": 2050,
+            "from": 0xD4E5F6A7,
+            "to": MY_NODE_NUM,
+            "channel": 0,
+            "decoded": {
+                "portnum": "TEXT_MESSAGE_APP",
+                "text": "Hey, can you check the repeater config on node MTRL?",
+            },
+            "rxSnr": 5.0,
+            "rxRssi": -95,
+            "hopLimit": 2,
+            "hopStart": 3,
+            "rxTime": t - 180,
+        }
+    )
 
     # --- Position updates ---
     for node_id, node in NODES.items():
         pos = node.get("position")
         if pos:
-            packets.append({
-                "id": 3001 + node["num"] % 100,
-                "from": node["num"],
-                "to": 0xFFFFFFFF,
-                "channel": 0,
-                "decoded": {
-                    "portnum": "POSITION_APP",
-                    "position": pos,
-                },
-                "rxSnr": node.get("snr", 5.0),
-                "rxRssi": node.get("rssi", -90),
-                "hopLimit": 3,
-                "hopStart": 3,
-                "rxTime": t - 60,
-            })
+            packets.append(
+                {
+                    "id": 3001 + node["num"] % 100,
+                    "from": node["num"],
+                    "to": 0xFFFFFFFF,
+                    "channel": 0,
+                    "decoded": {
+                        "portnum": "POSITION_APP",
+                        "position": pos,
+                    },
+                    "rxSnr": node.get("snr", 5.0),
+                    "rxRssi": node.get("rssi", -90),
+                    "hopLimit": 3,
+                    "hopStart": 3,
+                    "rxTime": t - 60,
+                }
+            )
 
     # --- Telemetry ---
     telem_data = [
-        (MY_NODE_NUM, {"batteryLevel": 95, "voltage": 4.18, "channelUtilization": 3.2, "airUtilTx": 0.8}),
-        (0xB2C3D4E5, {"batteryLevel": 78, "voltage": 3.95, "channelUtilization": 5.1, "airUtilTx": 1.5}),
-        (0xB8C9D0E1, {"batteryLevel": 100, "voltage": 4.20, "channelUtilization": 2.8, "airUtilTx": 0.5}),
-        (0xF6A7B8C9, {"batteryLevel": 92, "voltage": 4.10, "channelUtilization": 1.2, "airUtilTx": 0.3}),
-        (0xE5F6A7B8, {"batteryLevel": 64, "voltage": 3.78, "channelUtilization": 4.5, "airUtilTx": 1.1}),
+        (
+            MY_NODE_NUM,
+            {"batteryLevel": 95, "voltage": 4.18, "channelUtilization": 3.2, "airUtilTx": 0.8},
+        ),
+        (
+            0xB2C3D4E5,
+            {"batteryLevel": 78, "voltage": 3.95, "channelUtilization": 5.1, "airUtilTx": 1.5},
+        ),
+        (
+            0xB8C9D0E1,
+            {"batteryLevel": 100, "voltage": 4.20, "channelUtilization": 2.8, "airUtilTx": 0.5},
+        ),
+        (
+            0xF6A7B8C9,
+            {"batteryLevel": 92, "voltage": 4.10, "channelUtilization": 1.2, "airUtilTx": 0.3},
+        ),
+        (
+            0xE5F6A7B8,
+            {"batteryLevel": 64, "voltage": 3.78, "channelUtilization": 4.5, "airUtilTx": 1.1},
+        ),
     ]
     for i, (from_node, metrics) in enumerate(telem_data):
-        packets.append({
-            "id": 4001 + i,
-            "from": from_node,
+        packets.append(
+            {
+                "id": 4001 + i,
+                "from": from_node,
+                "to": 0xFFFFFFFF,
+                "channel": 0,
+                "decoded": {
+                    "portnum": "TELEMETRY_APP",
+                    "telemetry": {"deviceMetrics": metrics},
+                },
+                "rxSnr": 7.0,
+                "rxRssi": -82,
+                "hopLimit": 3,
+                "hopStart": 3,
+                "rxTime": t - 20 + i,
+            }
+        )
+
+    # --- Node info ---
+    packets.append(
+        {
+            "id": 5001,
+            "from": 0xA7B8C9D0,
             "to": 0xFFFFFFFF,
             "channel": 0,
             "decoded": {
-                "portnum": "TELEMETRY_APP",
-                "telemetry": {"deviceMetrics": metrics},
+                "portnum": "NODEINFO_APP",
+                "user": NODES["!a7b8c9d0"]["user"],
             },
-            "rxSnr": 7.0,
-            "rxRssi": -82,
+            "rxSnr": 7.5,
+            "rxRssi": -85,
             "hopLimit": 3,
             "hopStart": 3,
-            "rxTime": t - 20 + i,
-        })
-
-    # --- Node info ---
-    packets.append({
-        "id": 5001,
-        "from": 0xA7B8C9D0,
-        "to": 0xFFFFFFFF,
-        "channel": 0,
-        "decoded": {
-            "portnum": "NODEINFO_APP",
-            "user": NODES["!a7b8c9d0"]["user"],
-        },
-        "rxSnr": 7.5,
-        "rxRssi": -85,
-        "hopLimit": 3,
-        "hopStart": 3,
-        "rxTime": t - 10,
-    })
+            "rxTime": t - 10,
+        }
+    )
 
     return packets
 
@@ -313,7 +336,7 @@ def build_packets():
 def create_demo_state():
     """Build a richly populated state for screenshots."""
     storage = LogStorage(db_path=Path(":memory:"))
-    state = AppState(storage=storage)
+    state = AppState(storage=storage, settings=Settings())
 
     state.nodes.import_nodes(NODES)
     for node_id, node_data in NODES.items():
@@ -323,12 +346,15 @@ def create_demo_state():
         state.messages.add(packet)
         state.stats.record_packet(packet)
 
-    state.set_connected(True, {
-        "my_node_id": MY_NODE_ID,
-        "port": "/dev/ttyUSB0",
-        "firmware": "2.3.0",
-        "region": "US",
-    })
+    state.set_connected(
+        True,
+        {
+            "my_node_id": MY_NODE_ID,
+            "port": "/dev/ttyUSB0",
+            "firmware": "2.3.0",
+            "region": "US",
+        },
+    )
 
     state.channel_names = {0: "LongFast", 1: "Admin", 2: "Emergency"}
 

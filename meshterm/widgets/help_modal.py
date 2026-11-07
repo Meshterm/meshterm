@@ -24,7 +24,7 @@ HELP_CONTENT = {
             ("q", "Quit"),
             ("Esc", "Go back"),
             ("^h", "This help"),
-        ]
+        ],
     },
     "nodes": {
         "title": "Nodes",
@@ -36,7 +36,7 @@ HELP_CONTENT = {
             ("< / >", "Change sort column"),
             ("r", "Reverse sort"),
             ("j/k", "Navigate up/down"),
-        ]
+        ],
     },
     "chat": {
         "title": "Chat",
@@ -47,7 +47,7 @@ HELP_CONTENT = {
             ("^j", "Channel manager"),
             ("x", "Close DM"),
             ("PgUp/Dn", "Scroll history"),
-        ]
+        ],
     },
     "detail": {
         "title": "Detail",
@@ -55,7 +55,7 @@ HELP_CONTENT = {
             ("m", "Messages tab"),
             ("i", "Info tab"),
             ("<- / ->", "Prev/next tab"),
-        ]
+        ],
     },
     "settings": {
         "title": "Settings",
@@ -65,14 +65,14 @@ HELP_CONTENT = {
             ("g", "GPS config"),
             ("e", "Device config"),
             ("<- / ->", "Prev/next tab"),
-        ]
+        ],
     },
     "log": {
         "title": "Log",
         "keys": [
             ("/", "Search log"),
             ("PgUp/Dn", "Scroll"),
-        ]
+        ],
     },
 }
 

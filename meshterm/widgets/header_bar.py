@@ -9,7 +9,7 @@ from rich.text import Text
 from rich.cells import cell_len
 
 from ..state import AppState
-from ..formatting import Colors
+from ..formatting import Colors, sanitize_text
 
 
 class HeaderBar(Static):
@@ -66,22 +66,26 @@ class HeaderBar(Static):
 
     class TabSelected(Message):
         """Message sent when a tab is selected via Enter."""
+
         def __init__(self, tab_id: str):
             self.tab_id = tab_id
             super().__init__()
 
     class BackRequested(Message):
         """Message sent when back/Esc is selected from sub-tabs."""
+
         pass
 
     class SubTabSelected(Message):
         """Message sent when a sub-tab is selected."""
+
         def __init__(self, subtab_id: str):
             self.subtab_id = subtab_id
             super().__init__()
 
     class DMClosed(Message):
         """Message sent when a DM tab is closed."""
+
         def __init__(self, node_id: str):
             self.node_id = node_id
             super().__init__()
@@ -243,7 +247,8 @@ class HeaderBar(Static):
                         dm_name = dm.node_name
                         break
                 if not dm_name:
-                    dm_name = node_id[-4:]  # Last 4 chars of node ID
+                    dm_name = node_id[-4:]
+                dm_name = sanitize_text(dm_name)
                 # Check for notifications
                 notif_count = self.state.open_dms.get_notification_count(node_id)
                 notif_badge = f"({notif_count})" if notif_count > 0 else ""
@@ -258,7 +263,7 @@ class HeaderBar(Static):
                 if self.context == "chat" and tab_id.isdigit():
                     channel_name = self.state.get_channel_name(int(tab_id))
                     if channel_name:
-                        suffix = f":{channel_name}"
+                        suffix = f":{sanitize_text(channel_name)}"
 
             if self.context == "main":
                 is_active = tab_id == self.active_tab

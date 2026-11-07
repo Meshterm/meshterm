@@ -6,29 +6,50 @@ import threading
 import logging
 import logging.handlers
 import os
+from pathlib import Path
 from typing import Optional
 
 from textual.app import App, ComposeResult
 from textual import on
 
-# Set up file-based error logging
-_log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tmp')
-os.makedirs(_log_dir, exist_ok=True)
-_log_file = os.path.join(_log_dir, 'error.log')
 
-_file_handler = logging.handlers.RotatingFileHandler(
-    _log_file,
-    maxBytes=1024 * 1024,  # 1 MB
-    backupCount=3,
-)
-_file_handler.setLevel(logging.ERROR)
-_file_handler.setFormatter(logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-))
-logging.getLogger().addHandler(_file_handler)
+_error_logging_configured = False
+
+
+def _setup_error_logging():
+    """Create the error log in the XDG state directory, tolerating failures."""
+    global _error_logging_configured
+    if _error_logging_configured:
+        return
+    _error_logging_configured = True
+    try:
+        base = (
+            Path(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")))
+            / "meshterm"
+            / "logs"
+        )
+        base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(base, 0o700)
+        log_file = base / "error.log"
+        handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=1024 * 1024,
+            backupCount=3,
+        )
+        handler.setLevel(logging.ERROR)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
+        logging.getLogger().addHandler(handler)
+        os.chmod(log_file, 0o600)
+    except Exception:
+        logging.getLogger(__name__).debug("Could not initialize error log", exc_info=True)
+
+
 from textual.binding import Binding  # noqa: E402
 from textual.widgets import TabbedContent, TabPane  # noqa: E402
 
+from .formatting import is_broadcast_destination, sanitize_text  # noqa: E402
 from .state import AppState  # noqa: E402
 from .connection import MeshtasticConnection  # noqa: E402
 from .storage import LogStorage, PlainTextLogger  # noqa: E402
@@ -117,6 +138,7 @@ class MeshtermApp(App):
 
     def __init__(self, state: AppState, connection: MeshtasticConnection, **kwargs):
         super().__init__(**kwargs)
+        _setup_error_logging()
         self.state = state
         self.connection = connection
         self.connection._on_status_change = self._on_connection_status
@@ -146,24 +168,30 @@ class MeshtermApp(App):
         yield StatusBar(self.state, id="status-bar")
 
     def _on_connection_status(self, status: str, info: dict):
-        """Handle connection status changes."""
+        """Handle connection status changes on the UI thread."""
+        app_thread = getattr(self, "_thread_id", None)
+        if app_thread is not None and threading.get_ident() != app_thread:
+            try:
+                self.call_from_thread(self._on_connection_status, status, info)
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "Could not dispatch connection status", exc_info=True
+                )
+            return
+
         status_bar = self.query_one("#status-bar", StatusBar)
 
         if status == "connected":
             status_bar.set_connected(True)
-            node_id = info.get('my_node_id', '?')
+            node_id = info.get("my_node_id", "?")
             self.notify(f"Connected: {node_id}", timeout=3)
-            # Reset flags on successful connection
             self._intentional_disconnect = False
         else:
             status_bar.set_connected(False)
-
-            # Check if this is an unexpected disconnect
+            self.state.messages.clear_pending("disconnected")
             if self._intentional_disconnect or self._reconnect_modal_showing:
-                # Intentional or already handling - just show toast
                 self.notify("Disconnected", severity="warning", timeout=3)
             else:
-                # Unexpected disconnect - show reconnecting modal
                 self._show_reconnect_modal()
 
     def _show_reconnect_modal(self):
@@ -177,40 +205,44 @@ class MeshtermApp(App):
             self._reconnect_modal_showing = False
             if success:
                 self.notify("Reconnected to device", timeout=3)
-                # Update status bar
                 try:
                     status_bar = self.query_one("#status-bar", StatusBar)
                     status_bar.set_connected(True)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("Could not update status bar", exc_info=True)
             else:
-                self.notify("Could not reconnect. Please reconnect manually.", severity="error", timeout=5)
+                self.notify(
+                    "Could not reconnect. Please reconnect manually.",
+                    severity="error",
+                    timeout=5,
+                )
 
-        modal = ReconnectingModal(
-            self.connection,
-            reason="reconnect",
-            port=self.connection.port
-        )
-        self.push_screen(modal, on_reconnect_result)
+        modal = ReconnectingModal(self.connection, reason="reconnect", port=self.connection.port)
+        try:
+            self.push_screen(modal, on_reconnect_result)
+        except Exception:
+            self._reconnect_modal_showing = False
+            logging.getLogger(__name__).debug("Could not show reconnect modal", exc_info=True)
 
     def _handle_message_event(self, event_type: str, data):
         """Handle message events including DM notifications."""
+        app_thread = getattr(self, "_thread_id", None)
+        if app_thread is not None and threading.get_ident() != app_thread:
+            try:
+                self.call_from_thread(self._handle_message_event, event_type, data)
+            except Exception:
+                logging.getLogger(__name__).debug("Could not dispatch message event", exc_info=True)
+            return
         if event_type == "dm_received" and data:
-            from_name = data.get('from_name', '?')
-            preview = data.get('preview', '')
-
-            # Show toast notification
-            self.notify(f"DM from {from_name}: {preview}", timeout=5)
-
-            # Audio alert
+            from_name = sanitize_text(data.get("from_name", "?"))
+            preview = sanitize_text(data.get("preview", ""))
+            self.notify(f"DM from {from_name}: {preview}", timeout=5, markup=False)
             self.bell()
-
-            # Refresh header bar to show notification badge
             try:
                 header = self.query_one("#header-bar", HeaderBar)
                 header.refresh()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("Could not refresh header", exc_info=True)
 
     def action_switch_tab(self, tab_id: str):
         """Switch to a different tab."""
@@ -272,29 +304,30 @@ class MeshtermApp(App):
         # Trigger on_show for the view and focus appropriate widget
         if tab_id == "log":
             view = self.query_one("#log-view", LogView)
-            if hasattr(view, 'on_show'):
+            if hasattr(view, "on_show"):
                 view.on_show()
         elif tab_id == "nodes":
             view = self.query_one("#nodes-view", NodesView)
-            if hasattr(view, 'on_show'):
+            if hasattr(view, "on_show"):
                 view.on_show()
             try:
                 from .widgets.node_table import NodeTable
+
                 table = view.query_one(NodeTable)
                 table.focus()
             except Exception:
                 pass
         elif tab_id == "detail":
             view = self.query_one("#detail-view", DetailView)
-            if hasattr(view, 'on_show'):
+            if hasattr(view, "on_show"):
                 view.on_show()
         elif tab_id == "chat":
             view = self.query_one("#chat-view", ChatView)
-            if hasattr(view, 'on_show'):
+            if hasattr(view, "on_show"):
                 view.on_show()
         elif tab_id == "settings":
             view = self.query_one("#settings-view", SettingsView)
-            if hasattr(view, 'on_show'):
+            if hasattr(view, "on_show"):
                 view.on_show()
 
     def action_go_back(self):
@@ -335,7 +368,10 @@ class MeshtermApp(App):
         if self.current_view == "chat":
             view = self.query_one("#chat-view", ChatView)
             # If we were on the closed DM, switch to channel 0
-            if isinstance(view.current_channel, str) and view.current_channel == f"dm:{event.node_id}":
+            if (
+                isinstance(view.current_channel, str)
+                and view.current_channel == f"dm:{event.node_id}"
+            ):
                 view.action_switch_channel("0")
 
     def action_toggle_verbose(self):
@@ -387,8 +423,8 @@ class MeshtermApp(App):
             # Get node name for notification
             node = self.state.nodes.get_node(event.dest_node_id)
             if node:
-                user = node.get('user', {})
-                dest_name = user.get('shortName') or user.get('longName') or event.dest_node_id
+                user = node.get("user", {})
+                dest_name = user.get("shortName") or user.get("longName") or event.dest_node_id
             else:
                 dest_name = event.dest_node_id
 
@@ -414,45 +450,59 @@ class MeshtermApp(App):
         if success:
             # Add a TX marker to the log
             tx_packet = {
-                'from': self.state.my_node_id,
-                'to': dest,
-                'decoded': {
-                    'portnum': 'TEXT_MESSAGE_APP',
-                    'text': event.text  # Display without prefix
+                "from": self.state.my_node_id,
+                "to": dest,
+                "decoded": {
+                    "portnum": "TEXT_MESSAGE_APP",
+                    "text": event.text,  # Display without prefix
                 },
-                'channel': channel,
-                '_tx': True,  # Mark as transmitted
-                '_delivered': None,  # None = pending, True = delivered, False = failed
-                'id': request_id,  # Store packet ID for delivery tracking
+                "channel": channel,
+                "_tx": True,  # Mark as transmitted
+                "_delivered": None,  # None = pending, True = delivered, False = failed
+                "id": request_id,  # Store packet ID for delivery tracking
             }
 
             # Mark as reply if applicable
             if event.reply_to_packet_id:
-                tx_packet['_reply_to_packet_id'] = event.reply_to_packet_id
+                tx_packet["_reply_to_packet_id"] = event.reply_to_packet_id
 
             timestamp = time_module.time()
             db_id = self.state.messages.add(tx_packet)
 
             # Store reply reference if this is a reply
             if event.reply_to_packet_id and db_id and self.state.storage:
-                self.state.storage.store_reply_ref(db_id, event.reply_to_packet_id, timestamp)
+                endpoints = None
+                broadcast = False
+                if channel == 0:
+                    if is_broadcast_destination(dest):
+                        broadcast = True
+                    else:
+                        endpoints = (self.state.my_node_id, dest)
+                self.state.storage.store_reply_ref(
+                    db_id,
+                    event.reply_to_packet_id,
+                    timestamp,
+                    channel=channel,
+                    endpoints=endpoints,
+                    broadcast=broadcast,
+                )
 
             # Log to plain text file
             if self.state.text_logger:
                 self.state.text_logger.log_packet(tx_packet, timestamp)
 
-            # Track pending message and lock input until ACK
+            # Lock before registering pending so a synchronous early ACK can unlock.
             if request_id:
-                self.state.messages.add_pending(request_id, tx_packet, packet_id=request_id)
-
                 if self.current_view == "chat":
                     try:
                         from .views.chat import ChatView
+
                         chat_view = self.query_one("#chat-view", ChatView)
                         chat_input_widget = chat_view.query_one("#chat-input", ChatInput)
-                        chat_input_widget.lock_input()
+                        chat_input_widget.lock_input(request_id=request_id)
                     except Exception:
                         pass
+                self.state.messages.add_pending(request_id, tx_packet, packet_id=request_id)
         else:
             if dest_name:
                 self.notify("Failed to send DM", severity="error", timeout=3)
@@ -463,6 +513,7 @@ class MeshtermApp(App):
     def on_dm_input_message_submitted(self, event: DMInput.MessageSubmitted):
         """Handle DM sent from DM input."""
         import time as time_module
+
         # DMs use channel 0
         success, request_id = self.connection.send_message(event.text, event.dest_node_id, 0)
 
@@ -470,8 +521,8 @@ class MeshtermApp(App):
             # Get node name for notification
             node = self.state.nodes.get_node(event.dest_node_id)
             if node:
-                user = node.get('user', {})
-                dest_name = user.get('shortName') or user.get('longName') or event.dest_node_id
+                user = node.get("user", {})
+                dest_name = user.get("shortName") or user.get("longName") or event.dest_node_id
             else:
                 dest_name = event.dest_node_id
 
@@ -480,16 +531,13 @@ class MeshtermApp(App):
 
             # Add a TX marker to the log
             tx_packet = {
-                'from': self.state.my_node_id,
-                'to': event.dest_node_id,
-                'decoded': {
-                    'portnum': 'TEXT_MESSAGE_APP',
-                    'text': event.text
-                },
-                'channel': 0,
-                '_tx': True,  # Mark as transmitted
-                '_delivered': None,  # None = pending, True = delivered, False = failed
-                'id': request_id,  # Store packet ID for delivery tracking
+                "from": self.state.my_node_id,
+                "to": event.dest_node_id,
+                "decoded": {"portnum": "TEXT_MESSAGE_APP", "text": event.text},
+                "channel": 0,
+                "_tx": True,  # Mark as transmitted
+                "_delivered": None,  # None = pending, True = delivered, False = failed
+                "id": request_id,  # Store packet ID for delivery tracking
             }
             timestamp = time_module.time()
             self.state.messages.add(tx_packet)
@@ -504,8 +552,16 @@ class MeshtermApp(App):
         else:
             self.notify("Failed to send DM", severity="error", timeout=3)
 
+    def on_mount(self):
+        """Start periodic pending-send expiry."""
+        self.set_interval(5.0, self._expire_pending)
+
+    def _expire_pending(self):
+        self.state.messages.expire_pending(30.0)
+
     def on_unmount(self):
         """Cleanup when app exits."""
+        self.state.messages.clear_pending("shutdown")
         self.state.messages.unsubscribe(self._handle_message_event)
         self.connection.cleanup()
 
@@ -581,9 +637,7 @@ def connect_to_device(port: Optional[str] = None) -> Optional[tuple]:
     if stored_count > 0:
         print_status(f"Loaded {stored_count} nodes from database", "success")
 
-    print_status("Scanning for devices...")
-    ports = MeshtasticConnection.find_ports()
-
+    ports = [port] if port else MeshtasticConnection.find_ports()
     if not ports:
         print_status("No serial ports found", "error")
         print_status("Connect a Meshtastic device and try again")
@@ -619,7 +673,7 @@ def connect_to_device(port: Optional[str] = None) -> Optional[tuple]:
     pub.subscribe(on_node_updated, "meshtastic.node.updated")
     pub.subscribe(on_connected, "meshtastic.connection.established")
 
-    ports_to_try = [port] if port else ports
+    ports_to_try = ports
     connected = False
 
     try:
@@ -691,11 +745,11 @@ def connect_to_device(port: Optional[str] = None) -> Optional[tuple]:
         print_status(f"Node ID: {state.my_node_id}", "success")
 
     if state.connection_info:
-        region = state.connection_info.get('region', '')
-        modem = state.connection_info.get('modem_preset', '')
+        region = state.connection_info.get("region", "")
+        modem = state.connection_info.get("modem_preset", "")
         if region:
-            region = region.replace('Config.LoRaConfig.RegionCode.', '')
-            modem = modem.replace('Config.LoRaConfig.ModemPreset.', '')
+            region = region.replace("Config.LoRaConfig.RegionCode.", "")
+            modem = modem.replace("Config.LoRaConfig.ModemPreset.", "")
             print_status(f"Region: {region}, Modem: {modem}")
 
     node_count = len(state.nodes._nodes)
@@ -709,8 +763,8 @@ def main():
     """Entry point."""
     import argparse
 
-    parser = argparse.ArgumentParser(description='Meshterm - TUI for Meshtastic')
-    parser.add_argument('port', nargs='?', help='Serial port (auto-detects if not specified)')
+    parser = argparse.ArgumentParser(description="Meshterm - TUI for Meshtastic")
+    parser.add_argument("port", nargs="?", help="Serial port (auto-detects if not specified)")
     args = parser.parse_args()
 
     # Print logo

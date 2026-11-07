@@ -8,6 +8,7 @@ from textual.widgets import Static, Input
 from textual.message import Message
 from textual.binding import Binding
 
+from ..formatting import sanitize_text
 from ..state import AppState
 from ..widgets.node_table import NodeTable
 
@@ -76,7 +77,10 @@ class NodesView(Container):
         with Container(classes="search-bar"):
             yield Input(placeholder="Search nodes...", id="search-input", disabled=True)
         yield NodeTable(self.state, id="node-table")
-        yield Static("Enter=details  /=search  f=favorite  i=invite  o=online  </>=sort  r=reverse  Esc=back", classes="nodes-footer")
+        yield Static(
+            "Enter=details  /=search  f=favorite  i=invite  o=online  </>=sort  r=reverse  Esc=back",
+            classes="nodes-footer",
+        )
 
     def action_start_search(self):
         """Activate search mode."""
@@ -179,8 +183,8 @@ class NodesView(Container):
         node = self.state.nodes.get_node(node_id)
         name = node_id
         if node:
-            user = node.get('user', {})
-            name = user.get('shortName') or user.get('longName') or node_id
+            user = node.get("user", {})
+            name = user.get("shortName") or user.get("longName") or node_id
 
         # Check current favorite status
         is_fav = self.state.nodes.is_favorite(node_id)
@@ -190,7 +194,7 @@ class NodesView(Container):
             interface = self.app.connection.interface
             if interface and interface.localNode:
                 # Convert node_id to int for Meshtastic API
-                node_num = node.get('num') if node else None
+                node_num = node.get("num") if node else None
                 if node_num:
                     if is_fav:
                         interface.localNode.removeFavorite(node_num)
@@ -203,9 +207,9 @@ class NodesView(Container):
         self.state.nodes.set_favorite(node_id, not is_fav)
 
         if not is_fav:
-            self.app.notify(f"Favorited: {name}", timeout=2)
+            self.app.notify(f"Favorited: {sanitize_text(name)}", timeout=2, markup=False)
         else:
-            self.app.notify(f"Unfavorited: {name}", timeout=2)
+            self.app.notify(f"Unfavorited: {sanitize_text(name)}", timeout=2, markup=False)
 
     def _invite_node_to_channel(self, node_id: str):
         """Invite the specified node to a channel."""
@@ -225,9 +229,9 @@ class NodesView(Container):
         # Get node info for display
         node = self.state.nodes.get_node(node_id)
         if node:
-            user = node.get('user', {})
-            target_name = user.get('shortName') or user.get('longName') or node_id
-            target_num = node.get('num')
+            user = node.get("user", {})
+            target_name = user.get("shortName") or user.get("longName") or node_id
+            target_num = node.get("num")
         else:
             target_name = node_id
             target_num = None
@@ -244,20 +248,24 @@ class NodesView(Container):
                 if not confirmed:
                     return
 
-                success, message = self.app.connection.send_channel_invitation(
-                    target_num, channel
-                )
+                success, message = self.app.connection.send_channel_invitation(target_num, channel)
                 if success:
-                    ch_name = channel.get('name') or f"Ch{channel['index']}"
-                    self.app.notify(f"Invited {target_name} to {ch_name}", timeout=3)
+                    ch_name = channel.get("name") or f"Ch{channel['index']}"
+                    self.app.notify(
+                        f"Invited {sanitize_text(target_name)} to {sanitize_text(ch_name)}",
+                        timeout=3,
+                        markup=False,
+                    )
                 else:
-                    self.app.notify(f"Failed: {message}", severity="error", timeout=3)
+                    self.app.notify(
+                        f"Failed: {sanitize_text(message)}",
+                        severity="error",
+                        timeout=3,
+                        markup=False,
+                    )
 
             # Show confirmation dialog
-            self.app.push_screen(
-                InviteConfirmDialog(target_name, node_id, channel),
-                on_confirm
-            )
+            self.app.push_screen(InviteConfirmDialog(target_name, node_id, channel), on_confirm)
 
         # Show channel selection dialog
         self.app.push_screen(ChannelSelectDialog(channels), on_channel_selected)

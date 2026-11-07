@@ -8,7 +8,13 @@ from rich.text import Text
 
 from ..state import AppState
 from ..formatting import (
-    format_time_ago, Colors, haversine_distance, format_distance, get_node_position, get_location_name
+    format_time_ago,
+    Colors,
+    format_distance,
+    get_location_name,
+    get_node_position,
+    haversine_distance,
+    sanitize_text,
 )
 from ..widgets.dm_input import DMInput
 from ..widgets.chat_log import ChatLog
@@ -74,52 +80,52 @@ class NodeInfoPanel(Container):
 
         left = Text()
         right = Text()
-        user = node.get('user', {})
-        metrics = node.get('deviceMetrics', {})
-        last_heard = node.get('lastHeard')
+        user = node.get("user", {})
+        metrics = node.get("deviceMetrics", {})
+        last_heard = node.get("lastHeard")
 
         # LEFT COLUMN: Node info, Security
 
         left.append("Node:\n", style="bold")
-        left.append(f"  {user.get('longName', node_id)}\n")
+        left.append(f"  {sanitize_text(user.get('longName', node_id))}\n")
         left.append("Short:\n", style="bold")
-        left.append(f"  {user.get('shortName', '?')}\n")
+        left.append(f"  {sanitize_text(user.get('shortName', '?'))}\n")
         left.append("ID:\n", style="bold")
-        left.append(f"  {node_id}\n")
+        left.append(f"  {sanitize_text(node_id)}\n")
         left.append("Hardware:\n", style="bold")
-        left.append(f"  {user.get('hwModel', '?')}\n")
-        if user.get('macaddr'):
+        left.append(f"  {sanitize_text(user.get('hwModel', '?'))}\n")
+        if user.get("macaddr"):
             left.append("MAC:\n", style="bold")
-            left.append(f"  {user.get('macaddr')}\n")
+            left.append(f"  {sanitize_text(user.get('macaddr'))}\n")
         left.append("Seen:\n", style="bold")
         left.append(f"  {format_time_ago(last_heard)} ago\n")
 
         # Security/PKI status
         left.append("Security:\n", style="bold")
-        has_key = node.get('has_public_key', False)
+        has_key = node.get("has_public_key", False)
         if not has_key:
-            has_key = bool(user.get('publicKey'))
+            has_key = bool(user.get("publicKey"))
         if has_key:
             left.append("  PKI: Encrypted\n")
         else:
             left.append("  PKI: No public key\n")
-        if user.get('isUnmessagable'):
+        if user.get("isUnmessagable"):
             left.append("  Status: Unmessagable\n")
 
         # RIGHT COLUMN: Telemetry, Signal, Position
 
         right.append("Telemetry:\n", style="bold")
         if metrics:
-            if 'batteryLevel' in metrics:
+            if "batteryLevel" in metrics:
                 right.append(f"  Battery: {metrics['batteryLevel']}%\n")
-            if 'voltage' in metrics:
+            if "voltage" in metrics:
                 right.append(f"  Voltage: {metrics['voltage']:.2f}V\n")
-            if 'channelUtilization' in metrics:
+            if "channelUtilization" in metrics:
                 right.append(f"  Channel Util: {metrics['channelUtilization']:.1f}%\n")
-            if 'airUtilTx' in metrics:
+            if "airUtilTx" in metrics:
                 right.append(f"  Air Util TX: {metrics['airUtilTx']:.1f}%\n")
-            if 'uptimeSeconds' in metrics:
-                uptime = metrics['uptimeSeconds']
+            if "uptimeSeconds" in metrics:
+                uptime = metrics["uptimeSeconds"]
                 hrs = uptime // 3600
                 mins = (uptime % 3600) // 60
                 right.append(f"  Uptime: {hrs}h {mins}m\n")
@@ -127,8 +133,8 @@ class NodeInfoPanel(Container):
             right.append("  No telemetry data\n", style="dim")
 
         right.append("Signal:\n", style="bold")
-        snr = node.get('snr')
-        rssi = node.get('rssi')
+        snr = node.get("snr")
+        rssi = node.get("rssi")
         if snr is not None:
             right.append(f"  SNR: {snr:.1f}\n")
         if rssi is not None:
@@ -137,14 +143,14 @@ class NodeInfoPanel(Container):
             right.append("  No signal data\n", style="dim")
 
         right.append("Position:\n", style="bold")
-        position = node.get('position', {})
+        position = node.get("position", {})
         node_pos = get_node_position(node)
         if node_pos:
             lat, lon = node_pos
 
             location_name = get_location_name(lat, lon)
             if location_name:
-                right.append(f"  {location_name}\n")
+                right.append(f"  {sanitize_text(location_name)}\n")
 
             right.append(f"  Lat: {lat:.6f}\n")
             right.append(f"  Lon: {lon:.6f}\n")
@@ -154,17 +160,17 @@ class NodeInfoPanel(Container):
                 dist_km = haversine_distance(my_pos[0], my_pos[1], lat, lon)
                 right.append(f"  Distance: {format_distance(dist_km)}\n")
 
-            if 'altitude' in position:
+            if "altitude" in position:
                 right.append(f"  Altitude: {position['altitude']}m\n")
-            if 'satsInView' in position:
+            if "satsInView" in position:
                 right.append(f"  Satellites: {position['satsInView']}\n")
-            if 'groundSpeed' in position:
+            if "groundSpeed" in position:
                 right.append(f"  Speed: {position['groundSpeed']}m/s\n")
-            if 'groundTrack' in position:
+            if "groundTrack" in position:
                 right.append(f"  Heading: {position['groundTrack']}°\n")
-            if 'precisionBits' in position:
+            if "precisionBits" in position:
                 right.append(f"  Precision: {position['precisionBits']} bits\n")
-            if 'time' in position:
+            if "time" in position:
                 right.append(f"  Fix time: {format_time_ago(position['time'])} ago\n")
         else:
             right.append("  No position data\n", style="dim")
@@ -222,9 +228,9 @@ class NodeChatPanel(Container):
         if node_id:
             node = self.state.nodes.get_node(node_id)
             if node:
-                user = node.get('user', {})
-                name = user.get('shortName') or user.get('longName') or node_id
-                has_key = node.get('has_public_key') or bool(user.get('publicKey'))
+                user = node.get("user", {})
+                name = user.get("shortName") or user.get("longName") or node_id
+                has_key = node.get("has_public_key") or bool(user.get("publicKey"))
 
                 text.append(name, style="bold bright_cyan")
 
@@ -352,6 +358,7 @@ class DetailView(Container):
         # Update header bar
         try:
             from ..widgets.header_bar import HeaderBar
+
             header = self.app.query_one("#header-bar", HeaderBar)
             header.set_active_subtab(subtab)
         except Exception:

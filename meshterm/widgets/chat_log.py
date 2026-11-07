@@ -11,7 +11,7 @@ from rich.text import Text
 from rich.cells import cell_len
 
 from ..state import AppState
-from ..formatting import Colors, format_node_id
+from ..formatting import Colors, format_node_id, sanitize_text
 
 if TYPE_CHECKING:
     from ..storage import LogStorage
@@ -55,6 +55,7 @@ class ChatLog(RichLog):
 
     class MessageSelected(Message):
         """Posted when a message is selected for reaction/reply."""
+
         def __init__(self, entry: dict, mode: str):
             self.entry = entry
             self.mode = mode  # "react" or "reply"
@@ -62,15 +63,16 @@ class ChatLog(RichLog):
 
     class SelectionCancelled(Message):
         """Posted when selection mode is cancelled."""
+
         pass
 
     def __init__(self, state: AppState, **kwargs):
-        super().__init__(highlight=True, markup=True, wrap=True, **kwargs)
+        super().__init__(highlight=True, markup=True, wrap=True, max_lines=5000, **kwargs)
         self.state = state
         self._oldest_id: Optional[int] = None
         self._history_exhausted = False
         self._loading_history = False
-        self._displayed_entries: list = []  # Track message entries for re-rendering
+        self._displayed_entries: list = []  # bounded manually below
         self._reactions_cache: Dict[int, List[dict]] = {}  # db_id -> reactions
         self._reply_refs_cache: Dict[int, dict] = {}  # db_id -> reply ref info
         self.can_focus = False  # Only focusable during selection mode
@@ -91,22 +93,24 @@ class ChatLog(RichLog):
     def _handle_packet_event(self, event_type: str, data):
         """Handle new message, delivery update, or reaction update."""
         if event_type == "message_added" and data:
-            packet = data['packet']
-            decoded = packet.get('decoded', {})
-            portnum = str(decoded.get('portnum', ''))
+            packet = data["packet"]
+            decoded = packet.get("decoded", {})
+            portnum = str(decoded.get("portnum", ""))
 
             # Only handle TEXT_MESSAGE_APP
-            if portnum in ('TEXT_MESSAGE_APP', '1'):
-                packet_channel = packet.get('channel', 0)
+            if portnum in ("TEXT_MESSAGE_APP", "1"):
+                packet_channel = packet.get("channel", 0)
                 rendered = False
 
                 if self.dm_node_id:
                     # DM mode: only show messages to/from the DM node on channel 0
                     if packet_channel != 0:
                         return
-                    from_id = format_node_id(packet.get('from', ''))
-                    to_id = format_node_id(packet.get('to', ''))
+                    from_id = format_node_id(packet.get("from", ""))
+                    to_id = format_node_id(packet.get("to", ""))
                     dm_node_id = format_node_id(self.dm_node_id)
+                    if to_id in ("^all", "!ffffffff"):
+                        return
                     if from_id == dm_node_id or to_id == dm_node_id:
                         self._render_message(data)
                         rendered = True
@@ -115,28 +119,28 @@ class ChatLog(RichLog):
                     if packet_channel == self.channel:
                         # On channel 0, only show broadcasts (to=^all), not DMs
                         if self.channel == 0:
-                            to_id = format_node_id(packet.get('to', ''))
-                            if to_id not in ('^all', '!ffffffff'):
+                            to_id = format_node_id(packet.get("to", ""))
+                            if to_id not in ("^all", "!ffffffff"):
                                 return  # Skip DMs on channel 0
                         self._render_message(data)
                         rendered = True
 
                 # Start spinner if this is a pending TX message
-                if rendered and packet.get('_tx') and packet.get('_delivered') is None:
+                if rendered and packet.get("_tx") and packet.get("_delivered") is None:
                     self._has_pending_messages = True
                     self._start_pending_animation()
         elif event_type == "delivery_updated" and data:
             # Refresh the entire log to update the delivery indicator
             # (RichLog doesn't support updating individual lines)
             packet = data
-            decoded = packet.get('decoded', {})
-            portnum = str(decoded.get('portnum', ''))
-            if portnum in ('TEXT_MESSAGE_APP', '1'):
-                packet_channel = packet.get('channel', 0)
+            decoded = packet.get("decoded", {})
+            portnum = str(decoded.get("portnum", ""))
+            if portnum in ("TEXT_MESSAGE_APP", "1"):
+                packet_channel = packet.get("channel", 0)
                 if self.dm_node_id:
                     if packet_channel == 0:
-                        from_id = format_node_id(packet.get('from', ''))
-                        to_id = format_node_id(packet.get('to', ''))
+                        from_id = format_node_id(packet.get("from", ""))
+                        to_id = format_node_id(packet.get("to", ""))
                         dm_node_id = format_node_id(self.dm_node_id)
                         if from_id == dm_node_id or to_id == dm_node_id:
                             self.load_messages()
@@ -146,6 +150,8 @@ class ChatLog(RichLog):
                 self._has_pending_messages = self._check_pending_messages()
         elif event_type == "reaction_updated" and data:
             # Refresh to show updated reactions
+            self.load_messages()
+        elif event_type == "messages_cleared":
             self.load_messages()
 
     def _render_message(self, entry: dict, track: bool = True):
@@ -162,40 +168,42 @@ class ChatLog(RichLog):
         """
         if track:
             self._displayed_entries.append(entry)
-        packet = entry['packet']
-        timestamp = entry.get('timestamp', datetime.now().timestamp())
-        time_str = datetime.fromtimestamp(timestamp).strftime('%H:%M')
-        db_id = entry.get('_db_id')
+            if len(self._displayed_entries) > 2000:
+                del self._displayed_entries[: len(self._displayed_entries) - 2000]
+        packet = entry["packet"]
+        timestamp = entry.get("timestamp", datetime.now().timestamp())
+        time_str = datetime.fromtimestamp(timestamp).strftime("%H:%M")
+        db_id = entry.get("_db_id")
 
-        decoded = packet.get('decoded', {})
-        message_text = decoded.get('text', '')
+        decoded = packet.get("decoded", {})
+        message_text = sanitize_text(decoded.get("text", ""))
 
         if not message_text:
             return
 
         # Check if this is a TX packet (sent by us)
-        is_tx = packet.get('_tx', False)
+        is_tx = packet.get("_tx", False)
 
         # Get sender name
         if is_tx:
             # Get my node's name
             my_node = self.state.nodes.get_node(self.state.my_node_id)
             if my_node:
-                user = my_node.get('user', {})
-                sender_name = user.get('longName') or user.get('shortName') or "You"
+                user = my_node.get("user", {})
+                sender_name = user.get("longName") or user.get("shortName") or "You"
             else:
                 sender_name = "You"
             name_style = "bold bright_magenta"
         else:
-            from_id = packet.get('from', packet.get('fromId'))
+            from_id = packet.get("from", packet.get("fromId"))
             sender_name = format_node_id(from_id) if from_id else "???"
 
             # Try to get short name from node store
             if from_id:
                 node = self.state.nodes.get_node(from_id)
                 if node:
-                    user = node.get('user', {})
-                    sender_name = user.get('shortName') or user.get('longName') or sender_name
+                    user = node.get("user", {})
+                    sender_name = user.get("shortName") or user.get("longName") or sender_name
             name_style = "bold bright_cyan"
 
         # Build prefix parts and calculate width for wrapping
@@ -227,12 +235,14 @@ class ChatLog(RichLog):
         if continuation_width < 20:
             continuation_width = 20
 
-        # Check for reply indicator
         reply_ref = self._reply_refs_cache.get(db_id) if db_id else None
+        if reply_ref is None and db_id and self.storage:
+            reply_ref = self.storage.get_reply_ref(db_id)
+            if reply_ref:
+                self._reply_refs_cache[db_id] = reply_ref
         reply_preview = None
-
         if reply_ref:
-            reply_preview = self._get_reply_preview(reply_ref)
+            reply_preview = self._get_reply_preview(reply_ref, db_id)
 
         # Wrap message text (first line narrower, continuation lines wider)
         wrapped_lines = self._wrap_text(message_text, continuation_width, first_line_width)
@@ -243,7 +253,7 @@ class ChatLog(RichLog):
         text.append(" ")
         text.append(f"[{time_str}]", style=Colors.DIM)
         text.append(" <", style=Colors.DIM)
-        text.append(sender_name, style=name_style)
+        text.append(sanitize_text(sender_name), style=name_style)
         text.append("> ", style=Colors.DIM)
 
         # Add reply indicator if this is a reply (before message text)
@@ -267,12 +277,12 @@ class ChatLog(RichLog):
             self.write(cont_text)
 
         # Show error reason for failed TX messages
-        if is_tx and packet.get('_delivered') is False:
-            error_reason = packet.get('_error_reason')
+        if is_tx and packet.get("_delivered") is False:
+            error_reason = packet.get("_error_reason")
             if error_reason:
                 error_text = Text()
                 error_text.append(indent)
-                error_text.append(f"Error: {error_reason}", style="dim bright_red")
+                error_text.append(f"Error: {sanitize_text(error_reason)}", style="dim bright_red")
                 self.write(error_text)
 
         # Show reactions below message
@@ -280,26 +290,25 @@ class ChatLog(RichLog):
         if reactions:
             self._render_reactions(reactions, base_prefix_width)
 
-    def _get_reply_preview(self, reply_ref: dict) -> str:
+    def _get_reply_preview(self, reply_ref: dict, reply_db_id: Optional[int] = None) -> str:
         """Get a preview string for a reply's parent message."""
-        parent_db_id = reply_ref.get('parent_db_id')
-        parent_packet_id = reply_ref.get('parent_packet_id')
+        parent_db_id = reply_ref.get("parent_db_id")
+        parent_packet_id = reply_ref.get("parent_packet_id")
 
-        # Try to find the parent message
+        parent = None
         if parent_db_id and self.storage:
-            parent = self.storage.get_parent_message(parent_db_id)
-            if parent:
-                # Get parent sender name
-                sender_name = parent.from_node
-                node = self.state.nodes.get_node(parent.from_node)
-                if node:
-                    user = node.get('user', {})
-                    sender_name = user.get('shortName') or user.get('longName') or sender_name
-
-                # Get message preview (truncated)
-                text = parent.payload.get('text', '')
-                preview = text[:30] + '...' if len(text) > 30 else text
-                return f"{sender_name}: \"{preview}\""
+            parent = self.storage.get_message_by_db_id(parent_db_id)
+        elif reply_db_id and self.storage:
+            parent = self.storage.get_parent_message(reply_db_id)
+        if parent:
+            sender_name = parent.from_node
+            node = self.state.nodes.get_node(parent.from_node)
+            if node:
+                user = node.get("user", {})
+                sender_name = user.get("shortName") or user.get("longName") or sender_name
+            text = sanitize_text(parent.payload.get("text", ""))
+            preview = text[:30] + "..." if len(text) > 30 else text
+            return f'{sanitize_text(sender_name)}: "{preview}"'
 
         return f"msg #{parent_packet_id}"
 
@@ -309,7 +318,7 @@ class ChatLog(RichLog):
             return
 
         # Group reactions by emoji and count
-        emoji_counts = Counter(r['emoji'] for r in reactions)
+        emoji_counts = Counter(r["emoji"] for r in reactions)
 
         # Build reactions line
         indent = " " * prefix_width
@@ -343,7 +352,7 @@ class ChatLog(RichLog):
         if first_line_width is None:
             first_line_width = width
 
-        words = text.split(' ')
+        words = text.split(" ")
         lines = []
         current_line = []
         current_len = 0
@@ -360,7 +369,7 @@ class ChatLog(RichLog):
             if word_len > current_width:
                 # Flush current line first
                 if current_line:
-                    lines.append(' '.join(current_line))
+                    lines.append(" ".join(current_line))
                     current_line = []
                     current_len = 0
                     current_width = get_current_width()
@@ -388,15 +397,15 @@ class ChatLog(RichLog):
             else:
                 # Start new line
                 if current_line:
-                    lines.append(' '.join(current_line))
+                    lines.append(" ".join(current_line))
                 current_line = [word]
                 current_len = word_len
 
         # Don't forget the last line
         if current_line:
-            lines.append(' '.join(current_line))
+            lines.append(" ".join(current_line))
 
-        return lines if lines else ['']
+        return lines if lines else [""]
 
     def load_messages(self):
         """Load messages for the current channel or DM."""
@@ -417,14 +426,12 @@ class ChatLog(RichLog):
     def _load_channel_messages(self):
         """Load messages for a broadcast channel."""
         # On channel 0, only show broadcasts (to=^all), not DMs
-        broadcast_only = (self.channel == 0)
+        broadcast_only = self.channel == 0
 
         # Try to load from storage first
         if self.storage:
             messages = self.storage.get_text_messages(
-                channel=self.channel,
-                limit=self.HISTORY_PAGE_SIZE,
-                broadcast_only=broadcast_only
+                channel=self.channel, limit=self.HISTORY_PAGE_SIZE, broadcast_only=broadcast_only
             )
             if messages:
                 # Batch load reactions and reply refs
@@ -440,7 +447,9 @@ class ChatLog(RichLog):
                 return
 
         # Fall back to in-memory buffer (or if storage was empty)
-        messages = self.state.messages.get_text_messages(self.channel, broadcast_only=broadcast_only)
+        messages = self.state.messages.get_text_messages(
+            self.channel, broadcast_only=broadcast_only
+        )
         for entry in messages[-100:]:
             self._render_message(entry)
 
@@ -451,7 +460,7 @@ class ChatLog(RichLog):
             messages = self.storage.get_messages_for_node(
                 node_id=self.dm_node_id,
                 limit=self.HISTORY_PAGE_SIZE,
-                channel=0  # DMs are on channel 0
+                channel=0,  # DMs are on channel 0
             )
             if messages:
                 # Batch load reactions and reply refs
@@ -484,17 +493,17 @@ class ChatLog(RichLog):
                 node_id=self.dm_node_id,
                 limit=self.HISTORY_PAGE_SIZE,
                 before_id=self._oldest_id,
-                channel=0  # DMs are on channel 0
+                channel=0,  # DMs are on channel 0
             )
         else:
             # Broadcast mode: load more channel messages
             # On channel 0, only show broadcasts (to=^all), not DMs
-            broadcast_only = (self.channel == 0)
+            broadcast_only = self.channel == 0
             messages = self.storage.get_text_messages(
                 channel=self.channel,
                 limit=self.HISTORY_PAGE_SIZE,
                 before_id=self._oldest_id,
-                broadcast_only=broadcast_only
+                broadcast_only=broadcast_only,
             )
 
         if not messages:
@@ -520,6 +529,8 @@ class ChatLog(RichLog):
 
         # Prepend new entries and re-render all from data
         self._displayed_entries = new_entries + self._displayed_entries
+        if len(self._displayed_entries) > 2000:
+            del self._displayed_entries[: len(self._displayed_entries) - 2000]
 
         scroll_y = self.scroll_y
         self.clear()
@@ -554,7 +565,7 @@ class ChatLog(RichLog):
     def _get_status_indicator(self, packet: dict, is_tx: bool) -> tuple:
         """Get status string and style for a message."""
         if is_tx:
-            delivered = packet.get('_delivered')
+            delivered = packet.get("_delivered")
             if delivered is None:
                 frame = self.PENDING_FRAMES[self._pending_spinner_frame % len(self.PENDING_FRAMES)]
                 return f"[{frame}]", "bright_yellow"
@@ -563,8 +574,8 @@ class ChatLog(RichLog):
             else:
                 return "[✗]", "bright_red"
         else:
-            hop_start = packet.get('hopStart')
-            hop_limit = packet.get('hopLimit')
+            hop_start = packet.get("hopStart")
+            hop_limit = packet.get("hopLimit")
             if hop_start is not None and hop_limit is not None:
                 hops = hop_start - hop_limit
                 return f"[{hops}]", "bright_cyan"
@@ -574,8 +585,8 @@ class ChatLog(RichLog):
     def _check_pending_messages(self) -> bool:
         """Check if any displayed messages are still pending delivery."""
         for entry in self._displayed_entries:
-            packet = entry.get('packet', {})
-            if packet.get('_tx') and packet.get('_delivered') is None:
+            packet = entry.get("packet", {})
+            if packet.get("_tx") and packet.get("_delivered") is None:
                 return True
         return False
 
@@ -662,37 +673,37 @@ class ChatLog(RichLog):
 
         Returns the number of lines written.
         """
-        packet = entry['packet']
-        timestamp = entry.get('timestamp', datetime.now().timestamp())
-        time_str = datetime.fromtimestamp(timestamp).strftime('%H:%M')
-        db_id = entry.get('_db_id')
+        packet = entry["packet"]
+        timestamp = entry.get("timestamp", datetime.now().timestamp())
+        time_str = datetime.fromtimestamp(timestamp).strftime("%H:%M")
+        db_id = entry.get("_db_id")
 
-        decoded = packet.get('decoded', {})
-        message_text = decoded.get('text', '')
+        decoded = packet.get("decoded", {})
+        message_text = decoded.get("text", "")
 
         if not message_text:
             return 0
 
         is_selected = self.selection_active and index == self.selected_index
-        is_tx = packet.get('_tx', False)
+        is_tx = packet.get("_tx", False)
 
         # Get sender name
         if is_tx:
             my_node = self.state.nodes.get_node(self.state.my_node_id)
             if my_node:
-                user = my_node.get('user', {})
-                sender_name = user.get('longName') or user.get('shortName') or "You"
+                user = my_node.get("user", {})
+                sender_name = user.get("longName") or user.get("shortName") or "You"
             else:
                 sender_name = "You"
             name_style = "bold bright_magenta"
         else:
-            from_id = packet.get('from', packet.get('fromId'))
+            from_id = packet.get("from", packet.get("fromId"))
             sender_name = format_node_id(from_id) if from_id else "???"
             if from_id:
                 node = self.state.nodes.get_node(from_id)
                 if node:
-                    user = node.get('user', {})
-                    sender_name = user.get('shortName') or user.get('longName') or sender_name
+                    user = node.get("user", {})
+                    sender_name = user.get("shortName") or user.get("longName") or sender_name
             name_style = "bold bright_cyan"
 
         # Build prefix parts
@@ -783,8 +794,8 @@ class ChatLog(RichLog):
             lines_written += 1
 
         # Show error reason
-        if is_tx and packet.get('_delivered') is False:
-            error_reason = packet.get('_error_reason')
+        if is_tx and packet.get("_delivered") is False:
+            error_reason = packet.get("_error_reason")
             if error_reason:
                 error_text = Text()
                 error_text.append(indent)

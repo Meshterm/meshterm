@@ -47,6 +47,7 @@ class TestLogSearchUI:
 
             # Search bar should be visible
             from meshterm.views.log import LogView
+
             log_view = test_app_with_messages.query_one(LogView)
             search_bar = log_view.query_one(".search-bar")
             assert "visible" in search_bar.classes
@@ -65,6 +66,7 @@ class TestLogSearchUI:
             await pilot.pause()
 
             from meshterm.views.log import LogView
+
             log_view = test_app_with_messages.query_one(LogView)
             search_bar = log_view.query_one(".search-bar")
             assert "visible" not in search_bar.classes

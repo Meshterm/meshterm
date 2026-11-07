@@ -7,7 +7,7 @@ from textual.widgets import Static, Button, ListView, ListItem, Label
 from textual.binding import Binding
 from rich.text import Text
 
-from ..formatting import Colors
+from ..formatting import Colors, sanitize_text
 
 
 class ChannelSelectDialog(ModalScreen[dict | None]):
@@ -73,9 +73,9 @@ class ChannelSelectDialog(ModalScreen[dict | None]):
             yield Static("Select Channel to Share", id="channel-dialog-title")
             with ListView(id="channel-list"):
                 for ch in self.channels:
-                    name = ch.get('name') or f"Channel {ch['index']}"
-                    role = str(ch.get('role', '')).replace('Channel.Role.', '')
-                    psk_len = len(ch.get('psk', '')) // 2  # hex to bytes
+                    name = ch.get("name") or f"Channel {ch['index']}"
+                    role = str(ch.get("role", "")).replace("Channel.Role.", "")
+                    psk_len = len(ch.get("psk", "")) // 2  # hex to bytes
                     item_text = Text()
                     item_text.append(f"[{ch['index']}] ", style=Colors.DIM)
                     item_text.append(name, style="bold bright_cyan")
@@ -95,7 +95,7 @@ class ChannelSelectDialog(ModalScreen[dict | None]):
             if item_id and item_id.startswith("ch-"):
                 index = int(item_id.split("-")[1])
                 for ch in self.channels:
-                    if ch['index'] == index:
+                    if ch["index"] == index:
                         self.dismiss(ch)
                         return
         self.dismiss(None)
@@ -106,7 +106,7 @@ class ChannelSelectDialog(ModalScreen[dict | None]):
         if item_id and item_id.startswith("ch-"):
             index = int(item_id.split("-")[1])
             for ch in self.channels:
-                if ch['index'] == index:
+                if ch["index"] == index:
                     self.dismiss(ch)
                     return
 
@@ -186,19 +186,27 @@ class InviteConfirmDialog(ModalScreen[bool]):
         self.channel = channel
 
     def compose(self) -> ComposeResult:
-        ch_name = self.channel.get('name') or f"Channel {self.channel['index']}"
-        psk_len = len(self.channel.get('psk', '')) // 2
-        role = str(self.channel.get('role', '')).replace('Channel.Role.', '')
+        ch_name = self.channel.get("name") or f"Channel {self.channel['index']}"
+        psk_len = len(self.channel.get("psk", "")) // 2
+        role = str(self.channel.get("role", "")).replace("Channel.Role.", "")
 
         with Container(id="confirm-dialog-container"):
             yield Static("Confirm Channel Invitation", id="confirm-dialog-title")
             with Vertical(id="confirm-dialog-details"):
                 with Horizontal(classes="confirm-row"):
                     yield Static("Target:", classes="confirm-label")
-                    yield Static(f"{self.target_name} ({self.target_id})", classes="confirm-value")
+                    yield Static(
+                        Text(
+                            f"{sanitize_text(self.target_name)} ({sanitize_text(self.target_id)})"
+                        ),
+                        classes="confirm-value",
+                    )
                 with Horizontal(classes="confirm-row"):
                     yield Static("Channel:", classes="confirm-label")
-                    yield Static(f"[{self.channel['index']}] {ch_name}", classes="confirm-value")
+                    yield Static(
+                        Text(f"[{self.channel['index']}] {sanitize_text(ch_name)}"),
+                        classes="confirm-value",
+                    )
                 with Horizontal(classes="confirm-row"):
                     yield Static("Role:", classes="confirm-label")
                     yield Static(role, classes="confirm-value")

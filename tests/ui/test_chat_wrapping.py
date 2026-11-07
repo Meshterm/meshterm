@@ -36,18 +36,20 @@ def chat_state():
     state = AppState(storage=storage)
 
     # Add a node to be the message sender
-    state.nodes.import_nodes({
-        "!12345678": {
-            "num": 0x12345678,
-            "user": {
-                "id": "!12345678",
-                "longName": "Test Sender",
-                "shortName": "TEST",
-                "hwModel": "TBEAM",
+    state.nodes.import_nodes(
+        {
+            "!12345678": {
+                "num": 0x12345678,
+                "user": {
+                    "id": "!12345678",
+                    "longName": "Test Sender",
+                    "shortName": "TEST",
+                    "hwModel": "TBEAM",
+                },
+                "lastHeard": int(time.time()),
             },
-            "lastHeard": int(time.time()),
-        },
-    })
+        }
+    )
 
     state.set_connected(True, {"my_node_id": "!aabbccdd"})
     return state
@@ -75,7 +77,7 @@ class TestChatLogWrapping:
 
     def test_scrollbar_width_constant_exists(self):
         """ChatLog should define SCROLLBAR_WIDTH constant."""
-        assert hasattr(ChatLog, 'SCROLLBAR_WIDTH')
+        assert hasattr(ChatLog, "SCROLLBAR_WIDTH")
         assert ChatLog.SCROLLBAR_WIDTH == 8
 
     @pytest.mark.asyncio
@@ -92,8 +94,8 @@ class TestChatLogWrapping:
             # Create a long message that should wrap
             long_text = "This is a test message that should wrap properly on narrow screens without hiding under scrollbar"
             entry = {
-                'packet': make_text_packet(long_text),
-                'timestamp': time.time(),
+                "packet": make_text_packet(long_text),
+                "timestamp": time.time(),
             }
 
             # Render the message
@@ -115,8 +117,8 @@ class TestChatLogWrapping:
             # Message that should wrap on narrow screen
             text = "A moderately long message to test narrow wrapping behavior"
             entry = {
-                'packet': make_text_packet(text),
-                'timestamp': time.time(),
+                "packet": make_text_packet(text),
+                "timestamp": time.time(),
             }
 
             chat_log._render_message(entry)
@@ -136,8 +138,8 @@ class TestChatLogWrapping:
             # A word longer than available width
             long_word = "supercalifragilisticexpialidociousandmorecharacterstoexceedwidth"
             entry = {
-                'packet': make_text_packet(long_word),
-                'timestamp': time.time(),
+                "packet": make_text_packet(long_word),
+                "timestamp": time.time(),
             }
 
             chat_log._render_message(entry)
@@ -185,7 +187,7 @@ class TestWrapTextMethod:
         """Empty text should return empty string."""
         chat_log = ChatLog(state=chat_state)
         lines = chat_log._wrap_text("", 50)
-        assert lines == ['']
+        assert lines == [""]
 
     def test_wrap_text_zero_width(self, chat_state):
         """Zero or negative width should return original text."""

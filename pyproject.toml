@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A terminal user interface (TUI) for Meshtastic mesh networks"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [
     {name = "meshterm contributors"}
 ]
@@ -21,8 +21,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -31,10 +29,10 @@ classifiers = [
     "Topic :: Terminals",
 ]
 dependencies = [
-    "meshtastic>=2.0.0",
-    "textual>=0.40.0",
-    "reverse_geocoder",
-    "pgeocode",
+    "meshtastic>=2.7.0",
+    "textual>=8.0.0",
+    "reverse_geocoder>=1.5.0",
+    "pgeocode>=0.5.0",
 ]
 
 [project.optional-dependencies]
@@ -61,11 +59,14 @@ include = ["meshterm*"]
 
 [tool.black]
 line-length = 100
-target-version = ["py38"]
+target-version = ["py310"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py38"
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

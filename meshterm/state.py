@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 @dataclass
 class PendingMessage:
     """Track a sent message awaiting ACK."""
+
     request_id: int
     timestamp: float
     packet: dict  # Reference to the packet in MessageBuffer
@@ -21,6 +22,7 @@ class PendingMessage:
 @dataclass
 class Reaction:
     """A reaction (tapback) on a message."""
+
     emoji: str
     reactor_node: str
     timestamp: float
@@ -29,6 +31,7 @@ class Reaction:
 @dataclass
 class SelectionState:
     """State for message selection mode in chat."""
+
     active: bool = False
     mode: str = ""  # "react" or "reply"
     selected_index: int = 0
@@ -36,12 +39,12 @@ class SelectionState:
 
 # Supported reactions with their meanings
 SUPPORTED_REACTIONS = {
-    '👍': 'Thumbs up',
-    '👎': 'Thumbs down',
-    '❤️': 'Love',
-    '😂': 'Laugh',
-    '❗': 'Important',
-    '❓': 'Question',
+    "👍": "Thumbs up",
+    "👎": "Thumbs down",
+    "❤️": "Love",
+    "😂": "Laugh",
+    "❗": "Important",
+    "❓": "Question",
 }
 
 from .formatting import format_node_id, get_node_position  # noqa: E402
@@ -75,6 +78,7 @@ class Observable:
 @dataclass
 class DMChannel:
     """Represents an open DM conversation."""
+
     node_id: str
     node_name: str
 
@@ -174,7 +178,7 @@ class NodeStore(Observable):
         node_id_str = format_node_id(node_id)
 
         if node_id_str not in self._nodes:
-            self._nodes[node_id_str] = {'num': node_id}
+            self._nodes[node_id_str] = {"num": node_id}
 
         node = self._nodes[node_id_str]
 
@@ -186,12 +190,12 @@ class NodeStore(Observable):
                 node[key] = value
 
         # Extract PKI status from user data if present
-        user = data.get('user', {})
-        if 'publicKey' in user:
-            node['has_public_key'] = bool(user.get('publicKey'))
+        user = data.get("user", {})
+        if "publicKey" in user:
+            node["has_public_key"] = bool(user.get("publicKey"))
 
         # Update last seen
-        node['lastHeard'] = int(time.time())
+        node["lastHeard"] = int(time.time())
 
         # Persist to storage
         if self._storage:
@@ -211,15 +215,15 @@ class NodeStore(Observable):
     def import_nodes(self, nodes: dict):
         """Import nodes from interface (initial population)."""
         for node_id, node_data in nodes.items():
-            node_id_str = format_node_id(node_data.get('num', node_id))
+            node_id_str = format_node_id(node_data.get("num", node_id))
             node_copy = node_data.copy()
             # Convert isFavorite from Meshtastic lib to is_favorite
-            if 'isFavorite' in node_copy:
-                node_copy['is_favorite'] = node_copy.pop('isFavorite')
+            if "isFavorite" in node_copy:
+                node_copy["is_favorite"] = node_copy.pop("isFavorite")
             # Extract PKI status from user data
-            user = node_copy.get('user', {})
-            if 'publicKey' in user:
-                node_copy['has_public_key'] = bool(user.get('publicKey'))
+            user = node_copy.get("user", {})
+            if "publicKey" in user:
+                node_copy["has_public_key"] = bool(user.get("publicKey"))
             self._nodes[node_id_str] = node_copy
         self.notify("nodes_imported", None)
 
@@ -233,14 +237,14 @@ class NodeStore(Observable):
         node_id_str = format_node_id(node_id)
         node = self._nodes.get(node_id_str)
         if node:
-            return node.get('is_favorite', False)
+            return node.get("is_favorite", False)
         return False
 
     def set_favorite(self, node_id, is_favorite: bool):
         """Set the favorite status for a node."""
         node_id_str = format_node_id(node_id)
         if node_id_str in self._nodes:
-            self._nodes[node_id_str]['is_favorite'] = is_favorite
+            self._nodes[node_id_str]["is_favorite"] = is_favorite
             self.notify("node_updated", node_id_str)
 
 
@@ -252,34 +256,101 @@ class MessageBuffer(Observable):
         self._messages: deque = deque(maxlen=max_size)
         self._max_size = max_size
         self._pending: Dict[int, PendingMessage] = {}
+        self._early_acks: Dict[int, tuple] = {}
+        self._early_ack_order: deque = deque(maxlen=128)
         self._storage = storage
 
     def set_storage(self, storage: "LogStorage"):
         """Set the storage backend."""
         self._storage = storage
 
+    def _expire_early_acks(self, ttl: float = 60.0):
+        """Drop early ACKs older than the reconciliation window."""
+        now = time.time()
+        while self._early_ack_order:
+            request_id = self._early_ack_order[0]
+            record = self._early_acks.get(request_id)
+            if record is None:
+                self._early_ack_order.popleft()
+                continue
+            if now - record[0] <= ttl:
+                break
+            self._early_ack_order.popleft()
+            self._early_acks.pop(request_id, None)
+
+    def _record_early_ack(self, request_id: int, success: bool, error_reason: Optional[str]):
+        """Retain a bounded, expiring ACK that arrived before add_pending."""
+        self._expire_early_acks()
+        if request_id in self._early_acks:
+            self._early_acks[request_id] = (time.time(), success, error_reason)
+            return
+        while len(self._early_ack_order) >= self._early_ack_order.maxlen:
+            oldest = self._early_ack_order.popleft()
+            self._early_acks.pop(oldest, None)
+        self._early_ack_order.append(request_id)
+        self._early_acks[request_id] = (time.time(), success, error_reason)
+
+    def _apply_delivery(self, pending: PendingMessage, success: bool, error_reason: Optional[str]):
+        pending.packet["_delivered"] = success
+        if error_reason:
+            pending.packet["_error_reason"] = error_reason
+        if self._storage and pending.packet_id:
+            self._storage.update_delivery_status(pending.packet_id, success, error_reason)
+        self.notify("delivery_updated", pending.packet)
+
     def add_pending(self, request_id: int, packet: dict, packet_id: Optional[int] = None):
-        """Track a sent message awaiting ACK."""
-        self._pending[request_id] = PendingMessage(
+        """Track a sent message awaiting ACK, reconciling any early ACK."""
+        self._expire_early_acks()
+        pending = PendingMessage(
             request_id=request_id,
             timestamp=time.time(),
             packet=packet,
-            packet_id=packet_id
+            packet_id=packet_id,
         )
+        early = self._early_acks.pop(request_id, None)
+        if early is not None:
+            _, success, error_reason = early
+            self._apply_delivery(pending, success, error_reason)
+            return
+        self._pending[request_id] = pending
 
-    def resolve_pending(self, request_id: int, success: bool, error_reason: str = None) -> Optional[dict]:
+    def resolve_pending(
+        self, request_id: int, success: bool, error_reason: Optional[str] = None
+    ) -> Optional[dict]:
         """Mark a pending message as delivered/failed. Returns the packet."""
         if request_id in self._pending:
             pending = self._pending.pop(request_id)
-            pending.packet['_delivered'] = success
-            if error_reason:
-                pending.packet['_error_reason'] = error_reason
-            # Update delivery status in storage
-            if self._storage and pending.packet_id:
-                self._storage.update_delivery_status(pending.packet_id, success, error_reason)
-            self.notify("delivery_updated", pending.packet)
+            self._apply_delivery(pending, success, error_reason)
             return pending.packet
+        # ACK raced ahead of add_pending; retain it briefly for reconciliation.
+        self._record_early_ack(request_id, success, error_reason)
         return None
+
+    def expire_pending(self, max_age: float = 30.0) -> int:
+        """Fail pending sends that never received an ACK."""
+        now = time.time()
+        expired = [rid for rid, p in self._pending.items() if now - p.timestamp > max_age]
+        for request_id in expired:
+            pending = self._pending.pop(request_id)
+            self._apply_delivery(pending, False, "timeout")
+        return len(expired)
+
+    def clear_pending(self, error_reason: str = "disconnected") -> int:
+        """Fail and clear all pending sends."""
+        pending = list(self._pending.values())
+        self._pending.clear()
+        for item in pending:
+            self._apply_delivery(item, False, error_reason)
+        return len(pending)
+
+    def clear(self):
+        """Clear in-memory message history and delivery state."""
+        self._messages.clear()
+        self._pending.clear()
+        self._early_acks.clear()
+        self._early_ack_order.clear()
+        self.notify("cleared", None)
+        self.notify("messages_cleared", None)
 
     def add(self, packet: dict) -> Optional[int]:
         """Add a packet to the buffer.
@@ -288,16 +359,13 @@ class MessageBuffer(Observable):
             Database ID of the stored packet, or None if storage failed
         """
         timestamp = time.time()
-        entry = {
-            'packet': packet,
-            'timestamp': timestamp
-        }
+        entry = {"packet": packet, "timestamp": timestamp}
         db_id = None
         # Persist to storage
         if self._storage:
             try:
                 db_id = self._storage.store_packet(packet, timestamp)
-                entry['_db_id'] = db_id
+                entry["_db_id"] = db_id
             except Exception:
                 pass  # Don't let storage errors prevent message display
         self._messages.append(entry)
@@ -316,12 +384,15 @@ class MessageBuffer(Observable):
         """Get messages involving a specific node."""
         node_id_str = format_node_id(node_id)
         return [
-            m for m in self._messages
-            if format_node_id(m['packet'].get('from', '')) == node_id_str
-            or format_node_id(m['packet'].get('to', '')) == node_id_str
+            m
+            for m in self._messages
+            if format_node_id(m["packet"].get("from", "")) == node_id_str
+            or format_node_id(m["packet"].get("to", "")) == node_id_str
         ]
 
-    def get_text_messages(self, channel: Optional[int] = None, broadcast_only: bool = False) -> List[dict]:
+    def get_text_messages(
+        self, channel: Optional[int] = None, broadcast_only: bool = False
+    ) -> List[dict]:
         """Get TEXT_MESSAGE_APP messages, optionally filtered by channel.
 
         Args:
@@ -330,20 +401,22 @@ class MessageBuffer(Observable):
         """
         result = []
         for m in self._messages:
-            packet = m['packet']
-            decoded = packet.get('decoded', {})
-            portnum = str(decoded.get('portnum', ''))
-            if portnum in ('TEXT_MESSAGE_APP', '1'):
-                if channel is None or packet.get('channel', 0) == channel:
+            packet = m["packet"]
+            decoded = packet.get("decoded", {})
+            portnum = str(decoded.get("portnum", ""))
+            if portnum in ("TEXT_MESSAGE_APP", "1"):
+                if channel is None or packet.get("channel", 0) == channel:
                     if broadcast_only:
                         # Only include broadcasts, exclude DMs
-                        to_id = format_node_id(packet.get('to', ''))
-                        if to_id not in ('^all', '!ffffffff'):
+                        to_id = format_node_id(packet.get("to", ""))
+                        if to_id not in ("^all", "!ffffffff"):
                             continue
                     result.append(m)
         return result
 
-    def get_text_messages_for_node(self, node_id, channel: Optional[int] = 0, dm_only: bool = True) -> List[dict]:
+    def get_text_messages_for_node(
+        self, node_id, channel: Optional[int] = 0, dm_only: bool = True
+    ) -> List[dict]:
         """Get TEXT_MESSAGE_APP messages to/from specific node.
 
         Args:
@@ -354,32 +427,27 @@ class MessageBuffer(Observable):
         node_id_str = format_node_id(node_id)
         result = []
         for m in self._messages:
-            packet = m['packet']
-            decoded = packet.get('decoded', {})
-            portnum = str(decoded.get('portnum', ''))
-            if portnum in ('TEXT_MESSAGE_APP', '1'):
+            packet = m["packet"]
+            decoded = packet.get("decoded", {})
+            portnum = str(decoded.get("portnum", ""))
+            if portnum in ("TEXT_MESSAGE_APP", "1"):
                 # Filter by channel if specified
-                if channel is not None and packet.get('channel', 0) != channel:
+                if channel is not None and packet.get("channel", 0) != channel:
                     continue
-                from_id = format_node_id(packet.get('from', ''))
-                to_id = format_node_id(packet.get('to', ''))
+                from_id = format_node_id(packet.get("from", ""))
+                to_id = format_node_id(packet.get("to", ""))
 
                 if dm_only:
                     # DMs only: messages TO this node, or FROM this node but not broadcasts
                     is_to_node = to_id == node_id_str
                     is_from_node = from_id == node_id_str
-                    is_broadcast = to_id in ('^all', '!ffffffff')
+                    is_broadcast = to_id in ("^all", "!ffffffff")
                     if is_to_node or (is_from_node and not is_broadcast):
                         result.append(m)
                 else:
                     if from_id == node_id_str or to_id == node_id_str:
                         result.append(m)
         return result
-
-    def clear(self):
-        """Clear all messages."""
-        self._messages.clear()
-        self.notify("cleared", None)
 
     def __len__(self):
         return len(self._messages)
@@ -398,15 +466,15 @@ class StatsTracker(Observable):
         self.packet_times.append(time.time())
 
         # Extract channel utilization from telemetry
-        decoded = packet.get('decoded', {})
-        portnum = str(decoded.get('portnum', ''))
-        if portnum in ('TELEMETRY_APP', '67'):
-            telemetry = decoded.get('telemetry', {})
-            device = telemetry.get('deviceMetrics', {})
-            if 'channelUtilization' in device:
+        decoded = packet.get("decoded", {})
+        portnum = str(decoded.get("portnum", ""))
+        if portnum in ("TELEMETRY_APP", "67"):
+            telemetry = decoded.get("telemetry", {})
+            device = telemetry.get("deviceMetrics", {})
+            if "channelUtilization" in device:
                 # Channel 0 by default, could extract from packet channel
-                channel = packet.get('channel', 0)
-                self.channel_util[channel] = device['channelUtilization']
+                channel = packet.get("channel", 0)
+                self.channel_util[channel] = device["channelUtilization"]
 
         self.notify("stats_updated", None)
 
@@ -424,6 +492,7 @@ class StatsTracker(Observable):
 @dataclass
 class Settings:
     """Application settings."""
+
     verbose: bool = False
     filter_types: List[str] = field(default_factory=list)
     selected_node: Optional[str] = None
@@ -439,29 +508,31 @@ class Settings:
     def load_from_config(cls) -> "Settings":
         """Load settings from config file."""
         from .storage import load_config
+
         config = load_config()
         settings = cls()
-        if 'manual_location' in config and config['manual_location']:
-            loc = config['manual_location']
-            settings.manual_location = (loc['lat'], loc['lon'])
-            settings.manual_location_label = loc.get('label', '')
-        if 'use_gps' in config:
-            settings.use_gps = config['use_gps']
+        if "manual_location" in config and config["manual_location"]:
+            loc = config["manual_location"]
+            settings.manual_location = (loc["lat"], loc["lon"])
+            settings.manual_location_label = loc.get("label", "")
+        if "use_gps" in config:
+            settings.use_gps = config["use_gps"]
         return settings
 
     def _save_to_config(self):
         """Save persistent settings to config file."""
         from .storage import load_config, save_config
+
         config = load_config()
         if self.manual_location:
-            config['manual_location'] = {
-                'lat': self.manual_location[0],
-                'lon': self.manual_location[1],
-                'label': self.manual_location_label
+            config["manual_location"] = {
+                "lat": self.manual_location[0],
+                "lon": self.manual_location[1],
+                "label": self.manual_location_label,
             }
         else:
-            config.pop('manual_location', None)
-        config['use_gps'] = self.use_gps
+            config.pop("manual_location", None)
+        config["use_gps"] = self.use_gps
         save_config(config)
 
     def subscribe(self, callback: Callable):
@@ -521,10 +592,15 @@ class Settings:
 class AppState:
     """Container for all application state."""
 
-    def __init__(self, storage: "Optional[LogStorage]" = None, text_logger=None):
+    def __init__(
+        self,
+        storage: "Optional[LogStorage]" = None,
+        text_logger=None,
+        settings: "Optional[Settings]" = None,
+    ):
         self.nodes = NodeStore(storage=storage)
         self.messages = MessageBuffer(storage=storage)
-        self.settings = Settings.load_from_config()
+        self.settings = settings if settings is not None else Settings.load_from_config()
         self.stats = StatsTracker()
         self.open_dms = OpenDMsState()  # Track open DM conversations
         self.connected = False
@@ -554,7 +630,7 @@ class AppState:
         self.connected = connected
         if info:
             self.connection_info = info
-            self.my_node_id = info.get('my_node_id')
+            self.my_node_id = info.get("my_node_id")
 
     @property
     def my_position(self) -> Optional[tuple[float, float]]:

@@ -2,7 +2,7 @@
 
 A terminal user interface (TUI) for monitoring and interacting with Meshtastic mesh networks.
 
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Screenshots
@@ -58,7 +58,7 @@ bin/run       # Runs the application
 
 ### Requirements
 
-- Python 3.8+
+- Python 3.10+
 - A Meshtastic device connected via USB
 
 Dependencies (installed automatically):

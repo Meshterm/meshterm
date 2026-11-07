@@ -1,13 +1,70 @@
 """Display formatting - colors, emoji, packet formatting."""
 
+import re
+
 from datetime import datetime
 from math import radians, sin, cos, sqrt, atan2
-from typing import Optional, Tuple
 from rich.text import Text
+from typing import Optional, Tuple
+
+
+MAX_TEXT_BYTES = 233
+
+# Terminal control characters that must never reach the display. Keep newline
+# and tab; drop ESC, other C0 controls, DEL, and C1 controls.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def sanitize_text(value) -> str:
+    """Return a display-safe string with terminal control characters removed."""
+    if value is None:
+        return ""
+    return _CONTROL_CHAR_RE.sub("", str(value))
+
+
+def text_fits_mesh(text: str, overhead: int = 0) -> bool:
+    """Check whether text fits a Meshtastic data payload."""
+    return len(text.encode("utf-8")) + overhead <= MAX_TEXT_BYTES
+
+
+def _normalize_coordinate(value, integer_field: bool = False):
+    if value is None:
+        return None
+    try:
+        if integer_field or (isinstance(value, int) and abs(value) > 1000):
+            return value / 1e7
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def position_from_dict(pos) -> Optional[Tuple[float, float]]:
+    """Extract a valid lat/lon pair from a Meshtastic position dict."""
+    if not pos:
+        return None
+    lat = None
+    lon = None
+    if pos.get("latitude") is not None:
+        lat = _normalize_coordinate(pos.get("latitude"))
+    if lat is None:
+        lat = _normalize_coordinate(pos.get("latitudeI"), integer_field=True)
+    if pos.get("longitude") is not None:
+        lon = _normalize_coordinate(pos.get("longitude"))
+    if lon is None:
+        lon = _normalize_coordinate(pos.get("longitudeI"), integer_field=True)
+    if lat is None or lon is None:
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    # (0, 0) is Meshtastic's "unknown position" sentinel.
+    if lat == 0.0 and lon == 0.0:
+        return None
+    return (lat, lon)
 
 
 class Colors:
     """Color scheme for message types using Rich style names."""
+
     RESET = "default"
     BOLD = "bold"
     DIM = "dim white"
@@ -30,6 +87,7 @@ class Colors:
 
 class JsonColors:
     """Color scheme for JSON pretty printing."""
+
     KEY = "bright_cyan"
     STRING = "bright_green"
     NUMBER = "bright_yellow"
@@ -41,20 +99,20 @@ class JsonColors:
 # Map portnum names (strings) and values to display info
 PORTNUM_MAP = {
     # By string name
-    'TEXT_MESSAGE_APP': ("TEXT", Colors.TEXT),
-    'POSITION_APP': ("POSITION", Colors.POSITION),
-    'TELEMETRY_APP': ("TELEMETRY", Colors.TELEMETRY),
-    'NODEINFO_APP': ("NODEINFO", Colors.NODEINFO),
-    'ROUTING_APP': ("ROUTING", Colors.ROUTING),
-    'ADMIN_APP': ("ADMIN", Colors.ADMIN),
-    'NEIGHBORINFO_APP': ("NEIGHBOR", Colors.NODEINFO),
-    'RANGE_TEST_APP': ("RANGETEST", Colors.TELEMETRY),
-    'STORE_FORWARD_APP': ("STORE_FWD", Colors.ROUTING),
-    'WAYPOINT_APP': ("WAYPOINT", Colors.POSITION),
-    'MAP_REPORT_APP': ("MAP_REPORT", Colors.POSITION),
-    'PRIVATE_APP': ("PRIVATE", Colors.TEXT),
-    'ATAK_PLUGIN': ("ATAK", Colors.POSITION),
-    'ATAK_FORWARDER': ("ATAK", Colors.POSITION),
+    "TEXT_MESSAGE_APP": ("TEXT", Colors.TEXT),
+    "POSITION_APP": ("POSITION", Colors.POSITION),
+    "TELEMETRY_APP": ("TELEMETRY", Colors.TELEMETRY),
+    "NODEINFO_APP": ("NODEINFO", Colors.NODEINFO),
+    "ROUTING_APP": ("ROUTING", Colors.ROUTING),
+    "ADMIN_APP": ("ADMIN", Colors.ADMIN),
+    "NEIGHBORINFO_APP": ("NEIGHBOR", Colors.NODEINFO),
+    "RANGE_TEST_APP": ("RANGETEST", Colors.TELEMETRY),
+    "STORE_FORWARD_APP": ("STORE_FWD", Colors.ROUTING),
+    "WAYPOINT_APP": ("WAYPOINT", Colors.POSITION),
+    "MAP_REPORT_APP": ("MAP_REPORT", Colors.POSITION),
+    "PRIVATE_APP": ("PRIVATE", Colors.TEXT),
+    "ATAK_PLUGIN": ("ATAK", Colors.POSITION),
+    "ATAK_FORWARDER": ("ATAK", Colors.POSITION),
     # By integer value
     1: ("TEXT", Colors.TEXT),
     3: ("POSITION", Colors.POSITION),
@@ -72,7 +130,7 @@ def get_portnum_name(portnum):
     if result:
         return result
     if isinstance(portnum, str):
-        return (portnum.replace('_APP', '')[:10], Colors.UNKNOWN)
+        return (portnum.replace("_APP", "")[:10], Colors.UNKNOWN)
     return (f"PORT:{portnum}", Colors.UNKNOWN)
 
 
@@ -83,55 +141,66 @@ def format_node_id(node_id):
     return str(node_id)
 
 
+def is_broadcast_destination(node_id) -> bool:
+    """Return True when the destination is a broadcast, not a specific node."""
+    if node_id is None:
+        return True
+    if isinstance(node_id, int):
+        return node_id == 4294967295
+    return str(node_id) in ("^all", "!ffffffff", "all", "4294967295")
+
+
 def format_packet(packet, node_store=None) -> Text:
     """Format a packet for log display. Returns Rich Text object."""
     text = Text()
 
     # Use packet's rxTime if available, otherwise fall back to now
-    rx_time = packet.get('rxTime')
+    rx_time = packet.get("rxTime")
     if rx_time:
-        timestamp = datetime.fromtimestamp(rx_time).strftime('%H:%M:%S')
+        timestamp = datetime.fromtimestamp(rx_time).strftime("%H:%M:%S")
     else:
-        timestamp = datetime.now().strftime('%H:%M:%S')
+        timestamp = datetime.now().strftime("%H:%M:%S")
 
-    from_id = packet.get('fromId', packet.get('from', '?'))
-    to_id = packet.get('toId', packet.get('to', '?'))
+    from_id = packet.get("fromId", packet.get("from", "?"))
+    to_id = packet.get("toId", packet.get("to", "?"))
 
     # Get node names from store if available
-    from_name = format_node_id(packet.get('from', from_id))
-    to_name = format_node_id(packet.get('to', to_id))
+    from_name = format_node_id(packet.get("from", from_id))
+    to_name = format_node_id(packet.get("to", to_id))
 
     if node_store:
-        from_node = node_store.get_node(packet.get('from', from_id))
-        to_node = node_store.get_node(packet.get('to', to_id))
+        from_node = node_store.get_node(packet.get("from", from_id))
+        to_node = node_store.get_node(packet.get("to", to_id))
         if from_node:
-            user = from_node.get('user', {})
-            from_name = user.get('shortName') or user.get('longName') or from_name
+            user = from_node.get("user", {})
+            from_name = user.get("shortName") or user.get("longName") or from_name
         if to_node:
-            user = to_node.get('user', {})
-            to_name = user.get('shortName') or user.get('longName') or to_name
+            user = to_node.get("user", {})
+            to_name = user.get("shortName") or user.get("longName") or to_name
 
     # Get signal info
-    snr = packet.get('rxSnr', None)
-    rssi = packet.get('rxRssi', None)
-    hop_limit = packet.get('hopLimit', None)
-    hop_start = packet.get('hopStart', None)
+    snr = packet.get("rxSnr", None)
+    rssi = packet.get("rxRssi", None)
+    hop_limit = packet.get("hopLimit", None)
+    hop_start = packet.get("hopStart", None)
 
     # Determine message type
-    decoded = packet.get('decoded', {})
-    portnum = decoded.get('portnum', 0)
+    decoded = packet.get("decoded", {})
+    portnum = decoded.get("portnum", 0)
     portname, color = get_portnum_name(portnum)
 
     # Build the line
     text.append(f"[{timestamp}]", style=Colors.TIMESTAMP)
     text.append(" ")
-    text.append(f"[{portname:^10}]", style=f"{color} bold")
+    text.append(f"[{sanitize_text(portname):^10}]", style=f"{color} bold")
     text.append(" ")
-    text.append(from_name, style=Colors.FROM_NODE)
+    text.append(sanitize_text(from_name), style=Colors.FROM_NODE)
     text.append(" -> ", style=Colors.DIM)
 
-    to_display = "all" if to_id == "^all" or to_id == 4294967295 or str(to_id) == "!ffffffff" else to_name
-    text.append(to_display, style=Colors.FROM_NODE)
+    to_display = (
+        "all" if to_id == "^all" or to_id == 4294967295 or str(to_id) == "!ffffffff" else to_name
+    )
+    text.append(sanitize_text(to_display), style=Colors.FROM_NODE)
 
     # Signal info
     if snr is not None or rssi is not None or (hop_limit is not None and hop_start is not None):
@@ -158,28 +227,25 @@ def format_payload(packet, node_store=None) -> Text:
     text = Text()
     indent = "           "  # 11 spaces to align with [HH:MM:SS]
 
-    decoded = packet.get('decoded', {})
-    portnum = decoded.get('portnum', 0)
+    decoded = packet.get("decoded", {})
+    portnum = decoded.get("portnum", 0)
     _, color = get_portnum_name(portnum)
     portnum_str = str(portnum)
 
-    if portnum_str in ('TEXT_MESSAGE_APP', '1'):
-        msg = decoded.get('text', '')
+    if portnum_str in ("TEXT_MESSAGE_APP", "1"):
+        msg = sanitize_text(decoded.get("text", ""))
         if msg:
             text.append(f"{indent}", style=Colors.DIM)
             text.append(f"[message] {msg}", style=color)
 
-    elif portnum_str in ('POSITION_APP', '3'):
-        pos = decoded.get('position', {})
-        lat = pos.get('latitude', pos.get('latitudeI', 0))
-        lon = pos.get('longitude', pos.get('longitudeI', 0))
-        alt = pos.get('altitude', None)
-        speed = pos.get('groundSpeed', None)
-        sats = pos.get('satsInView', None)
-        if isinstance(lat, int) and abs(lat) > 1000:
-            lat = lat / 1e7
-            lon = lon / 1e7
-        if lat and lon:
+    elif portnum_str in ("POSITION_APP", "3"):
+        pos = decoded.get("position", {})
+        alt = pos.get("altitude", None)
+        speed = pos.get("groundSpeed", None)
+        sats = pos.get("satsInView", None)
+        coords = position_from_dict(pos)
+        if coords:
+            lat, lon = coords
             text.append(f"{indent}", style=Colors.DIM)
             parts = [f"[position] {lat:.6f}, {lon:.6f}"]
             if alt:
@@ -188,68 +254,70 @@ def format_payload(packet, node_store=None) -> Text:
                 parts.append(f"spd:{speed}m/s")
             if sats:
                 parts.append(f"sats:{sats}")
-            text.append(' '.join(parts), style=color)
+            text.append(" ".join(parts), style=color)
 
-    elif portnum_str in ('TELEMETRY_APP', '67'):
-        telem = decoded.get('telemetry', {})
-        device = telem.get('deviceMetrics', {})
-        env = telem.get('environmentMetrics', {})
-        power = telem.get('powerMetrics', {})
+    elif portnum_str in ("TELEMETRY_APP", "67"):
+        telem = decoded.get("telemetry", {})
+        device = telem.get("deviceMetrics", {})
+        env = telem.get("environmentMetrics", {})
+        power = telem.get("powerMetrics", {})
         parts = []
         if device:
-            if 'batteryLevel' in device:
+            if "batteryLevel" in device:
                 parts.append(f"bat:{device['batteryLevel']}%")
-            if 'voltage' in device:
+            if "voltage" in device:
                 parts.append(f"v:{device['voltage']:.2f}V")
-            if 'channelUtilization' in device:
+            if "channelUtilization" in device:
                 parts.append(f"ch:{device['channelUtilization']:.1f}%")
-            if 'airUtilTx' in device:
+            if "airUtilTx" in device:
                 parts.append(f"tx:{device['airUtilTx']:.1f}%")
-            if 'uptimeSeconds' in device:
-                uptime = device['uptimeSeconds']
+            if "uptimeSeconds" in device:
+                uptime = device["uptimeSeconds"]
                 hrs = uptime // 3600
                 mins = (uptime % 3600) // 60
                 parts.append(f"up:{hrs}h{mins}m")
         if env:
-            if 'temperature' in env:
+            if "temperature" in env:
                 parts.append(f"temp:{env['temperature']:.1f}C")
-            if 'relativeHumidity' in env:
+            if "relativeHumidity" in env:
                 parts.append(f"hum:{env['relativeHumidity']:.0f}%")
-            if 'barometricPressure' in env:
+            if "barometricPressure" in env:
                 parts.append(f"pres:{env['barometricPressure']:.1f}hPa")
         if power:
-            if 'ch1Voltage' in power:
+            if "ch1Voltage" in power:
                 parts.append(f"ch1:{power['ch1Voltage']:.2f}V")
         if parts:
             text.append(f"{indent}", style=Colors.DIM)
             text.append(f"[telemetry] {' '.join(parts)}", style=color)
 
-    elif portnum_str in ('NODEINFO_APP', '4'):
-        user = decoded.get('user', {})
-        long_name = user.get('longName', '')
-        short_name = user.get('shortName', '')
-        hw_model = user.get('hwModel', '')
+    elif portnum_str in ("NODEINFO_APP", "4"):
+        user = decoded.get("user", {})
+        long_name = sanitize_text(user.get("longName", ""))
+        short_name = sanitize_text(user.get("shortName", ""))
+        hw_model = sanitize_text(user.get("hwModel", ""))
         if long_name or short_name:
             text.append(f"{indent}", style=Colors.DIM)
             text.append(f"[nodeinfo] {long_name} ({short_name}) [{hw_model}]", style=color)
 
-    elif portnum_str in ('ROUTING_APP', '65'):
-        routing = decoded.get('routing', {})
-        error = routing.get('errorReason', '')
-        if error and error != 'NONE':
+    elif portnum_str in ("ROUTING_APP", "65"):
+        routing = decoded.get("routing", {})
+        error = sanitize_text(routing.get("errorReason", ""))
+        if error and error != "NONE":
             text.append(f"{indent}", style=Colors.DIM)
             text.append(f"[error] {error}", style=color)
         else:
-            ack = decoded.get('requestId', None)
+            ack = decoded.get("requestId", None)
             if ack:
                 text.append(f"{indent}", style=Colors.DIM)
                 text.append(f"[ack] request {ack}", style=color)
 
-    elif portnum_str in ('NEIGHBORINFO_APP', '71'):
-        neighbor = decoded.get('neighborinfo', {})
-        neighbors = neighbor.get('neighbors', [])
+    elif portnum_str in ("NEIGHBORINFO_APP", "71"):
+        neighbor = decoded.get("neighborinfo", {})
+        neighbors = neighbor.get("neighbors", [])
         if neighbors:
-            neighbor_list = ', '.join([format_node_id(n.get('nodeId', 0)) for n in neighbors[:5]])
+            neighbor_list = ", ".join(
+                sanitize_text(format_node_id(n.get("nodeId", 0))) for n in neighbors[:5]
+            )
             text.append(f"{indent}", style=Colors.DIM)
             text.append(f"[neighbors] {len(neighbors)}: {neighbor_list}", style=color)
 
@@ -261,23 +329,23 @@ def format_verbose(packet) -> Text:
     text = Text()
     indent = "  "
 
-    decoded = packet.get('decoded', {})
-    hop_limit = packet.get('hopLimit', None)
+    decoded = packet.get("decoded", {})
+    hop_limit = packet.get("hopLimit", None)
 
     info_parts = []
-    if 'id' in packet:
+    if "id" in packet:
         info_parts.append(f"id:{packet['id']}")
-    if 'channel' in packet:
+    if "channel" in packet:
         info_parts.append(f"ch:{packet['channel']}")
     if hop_limit is not None:
         info_parts.append(f"hopLim:{hop_limit}")
-    if 'rxTime' in packet:
+    if "rxTime" in packet:
         info_parts.append(f"rx:{datetime.fromtimestamp(packet['rxTime']).strftime('%H:%M:%S')}")
-    if decoded.get('requestId'):
+    if decoded.get("requestId"):
         info_parts.append(f"reqId:{decoded['requestId']}")
 
     if info_parts:
-        text.append(f"{indent}[{' | '.join(info_parts)}]\n", style=Colors.DIM)
+        text.append(f"{indent}[{sanitize_text(' | '.join(info_parts))}]\n", style=Colors.DIM)
 
     return text
 
@@ -296,7 +364,7 @@ def pretty_print_json(obj, indent=0) -> Text:
                 items = list(val.items())
                 for i, (k, v) in enumerate(items):
                     text.append(f"{spacing}  ", style="default")
-                    text.append(f'"{k}"', style=JsonColors.KEY)
+                    text.append(f'"{sanitize_text(k)}"', style=JsonColors.KEY)
                     text.append(": ", style="default")
                     print_value(v, ind + 1)
                     if i < len(items) - 1:
@@ -320,7 +388,8 @@ def pretty_print_json(obj, indent=0) -> Text:
                 text.append(f"{spacing}", style="default")
                 text.append("]", style=JsonColors.BRACE)
         elif isinstance(val, str):
-            display = val if len(val) <= 60 else val[:57] + "..."
+            display = sanitize_text(val)
+            display = display if len(display) <= 60 else display[:57] + "..."
             text.append(f'"{display}"', style=JsonColors.STRING)
         elif isinstance(val, bool):
             text.append(str(val).lower(), style=JsonColors.BOOL)
@@ -328,8 +397,7 @@ def pretty_print_json(obj, indent=0) -> Text:
             text.append(str(val), style=JsonColors.NUMBER)
         elif val is None:
             text.append("null", style=JsonColors.NULL)
-        else:
-            text.append(f'"{val}"', style=JsonColors.STRING)
+            text.append(f'"{sanitize_text(val)}"', style=JsonColors.STRING)
 
     print_value(obj, indent)
     return text
@@ -338,6 +406,7 @@ def pretty_print_json(obj, indent=0) -> Text:
 def format_time_ago(timestamp):
     """Format a timestamp as time ago string."""
     import time
+
     if not timestamp:
         return "?"
     ago = int(time.time()) - timestamp
@@ -365,10 +434,11 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 def _use_imperial() -> bool:
     """Check if locale uses imperial units (miles)."""
     import locale
+
     try:
-        loc = locale.getlocale()[0] or locale.getdefaultlocale()[0] or ''
+        loc = locale.getlocale()[0] or locale.getdefaultlocale()[0] or ""
         # US, UK, Myanmar, Liberia use miles
-        return loc.startswith(('en_US', 'en_GB', 'en_LR', 'my_MM'))
+        return loc.startswith(("en_US", "en_GB", "en_LR", "my_MM"))
     except Exception:
         return False
 
@@ -404,20 +474,10 @@ def get_node_position(node: dict) -> Optional[Tuple[float, float]]:
     """Extract normalized lat/lon from a node's position data."""
     if not node:
         return None
-    position = node.get('position', {})
-    if not position:
-        return None
-    lat = position.get('latitude', position.get('latitudeI', 0))
-    lon = position.get('longitude', position.get('longitudeI', 0))
-    if isinstance(lat, int) and abs(lat) > 1000:
-        lat = lat / 1e7
-        lon = lon / 1e7
-    if lat and lon:
-        return (lat, lon)
-    return None
+    return position_from_dict(node.get("position", {}))
 
 
-def lookup_postal_code(postal_code: str, country: str = 'US') -> Optional[Tuple[float, float]]:
+def lookup_postal_code(postal_code: str, country: str = "US") -> Optional[Tuple[float, float]]:
     """Look up coordinates from a postal code.
 
     Returns (lat, lon) tuple or None if lookup fails.
@@ -425,6 +485,7 @@ def lookup_postal_code(postal_code: str, country: str = 'US') -> Optional[Tuple[
     """
     try:
         import pgeocode
+
         nomi = pgeocode.Nominatim(country)
         result = nomi.query_postal_code(postal_code)
         if result is not None and not (result.latitude != result.latitude):  # NaN check
@@ -444,14 +505,15 @@ def get_location_name(lat: float, lon: float) -> Optional[str]:
     """
     try:
         import reverse_geocoder as rg
+
         result = rg.search((lat, lon))
         if result and len(result) > 0:
             r = result[0]
-            city = r.get('name', '')
-            admin1 = r.get('admin1', '')  # State/Province
-            cc = r.get('cc', '')  # Country code
+            city = r.get("name", "")
+            admin1 = r.get("admin1", "")  # State/Province
+            cc = r.get("cc", "")  # Country code
             parts = [p for p in [city, admin1, cc] if p]
-            return ', '.join(parts) if parts else None
+            return ", ".join(parts) if parts else None
     except ImportError:
         return None  # Library not installed
     except Exception:

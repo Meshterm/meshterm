@@ -105,8 +105,9 @@ class LogView(Container):
             self._close_search_keep_filter()
 
     def action_handle_escape(self):
-        """Handle escape - close search if active."""
-        if self._search_active:
+        """Handle escape - close search or clear a retained filter."""
+        log_panel = self.query_one("#log-panel", LogPanel)
+        if self._search_active or log_panel._filter_active:
             self._close_search()
         else:
             self.app.action_go_back()

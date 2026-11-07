@@ -2,24 +2,69 @@
 
 import glob
 import re
-from typing import Optional, Callable, Tuple, Union
+from typing import Callable, Optional, Tuple, Union
+
 from pubsub import pub
 
-from .state import AppState, SUPPORTED_REACTIONS
-from .formatting import format_node_id
+from .formatting import (
+    format_node_id,
+    is_broadcast_destination,
+    position_from_dict,
+    text_fits_mesh,
+)
+from .state import SUPPORTED_REACTIONS, AppState
+
+MAX_PACKET_ID = 0xFFFFFFFF
+
+
+def _valid_packet_id(value) -> bool:
+    return isinstance(value, int) and 0 <= value <= MAX_PACKET_ID
+
+
+def _parse_psk(value) -> bytes:
+    """Validate and decode a channel PSK; raise ValueError when invalid."""
+    import base64
+    import secrets
+
+    if isinstance(value, bytes):
+        psk = value
+    elif isinstance(value, str):
+        text = value.strip()
+        lowered = text.lower()
+        if lowered == "default":
+            return bytes([1])
+        if lowered == "none":
+            return bytes([0])
+        if lowered == "random":
+            return secrets.token_bytes(32)
+        if not text:
+            raise ValueError("PSK is empty")
+        try:
+            psk = bytes.fromhex(text)
+        except ValueError:
+            try:
+                psk = base64.b64decode(text, validate=True)
+            except Exception as exc:
+                raise ValueError("PSK is not valid hex or base64") from exc
+    else:
+        raise ValueError("PSK must be text or bytes")
+    if len(psk) not in (1, 16, 32):
+        raise ValueError("PSK must be 1, 16, or 32 bytes")
+    return psk
+
 
 # Protocol prefixes for reactions and replies
 # Reaction: [R:<packet_id>:<emoji>] - e.g., [R:123456:👍]
 # Reply: [>:<packet_id>] <message text> - e.g., [>:123456] Hello!
-REACTION_PATTERN = re.compile(r'^\[R:(\d+):([^\]]+)\]$')
-REPLY_PATTERN = re.compile(r'^\[>:(\d+)\]\s*(.*)$', re.DOTALL)
+REACTION_PATTERN = re.compile(r"^\[R:(\d+):([^\]]+)\]$")
+REPLY_PATTERN = re.compile(r"^\[>:(\d+)\]\s*(.*)$", re.DOTALL)
 
 # Settings that cause device reboot when changed
 # Maps config_type -> set of field names that trigger reboot
 REBOOT_CAUSING_SETTINGS = {
-    'lora': {'region', 'modem_preset'},
-    'device': {'role'},
-    'position': {'gps_mode'},
+    "lora": {"region", "modem_preset"},
+    "device": {"role"},
+    "position": {"gps_mode"},
 }
 
 
@@ -40,16 +85,17 @@ class MeshtasticConnection:
     def _on_receive(self, packet, interface):
         """Handle received packets."""
         import time
+
         timestamp = time.time()
 
         # Check for incoming DMs (TEXT_MESSAGE_APP on channel 0, to=my_node_id)
-        decoded = packet.get('decoded', {})
-        portnum = str(decoded.get('portnum', ''))
+        decoded = packet.get("decoded", {})
+        portnum = str(decoded.get("portnum", ""))
 
         # Check for reaction/reply prefixes in TEXT_MESSAGE_APP
-        if portnum in ('TEXT_MESSAGE_APP', '1'):
-            text = decoded.get('text', '')
-            from_id = format_node_id(packet.get('from', ''))
+        if portnum in ("TEXT_MESSAGE_APP", "1"):
+            text = decoded.get("text", "")
+            from_id = format_node_id(packet.get("from", ""))
 
             # Check for reaction prefix: [R:<packet_id>:<emoji>]
             reaction_match = REACTION_PATTERN.match(text)
@@ -61,21 +107,40 @@ class MeshtasticConnection:
             reply_match = REPLY_PATTERN.match(text)
             if reply_match:
                 parent_packet_id = int(reply_match.group(1))
-                actual_text = reply_match.group(2)
-                # Store the original text and mark as a reply
-                packet['_reply_to_packet_id'] = parent_packet_id
-                # Update the decoded text to the actual message (without prefix)
-                decoded['text'] = actual_text
-                decoded['_original_text'] = text  # Keep original for debugging
+                if _valid_packet_id(parent_packet_id):
+                    actual_text = reply_match.group(2)
+                    # Store the original text and mark as a reply
+                    packet["_reply_to_packet_id"] = parent_packet_id
+                    # Update the decoded text to the actual message (without prefix)
+                    decoded["text"] = actual_text
+                    decoded["_original_text"] = text  # Keep original for debugging
 
         # Add to message buffer (this also persists to SQLite)
         db_id = self.state.messages.add(packet)
 
         # If this is a reply, store the reply reference
-        if packet.get('_reply_to_packet_id') and self.state.storage:
-            parent_packet_id = packet['_reply_to_packet_id']
+        if packet.get("_reply_to_packet_id") and self.state.storage:
+            parent_packet_id = packet["_reply_to_packet_id"]
+            channel = packet.get("channel", 0)
+            endpoints = None
+            broadcast = False
+            if channel == 0:
+                if is_broadcast_destination(packet.get("to")):
+                    broadcast = True
+                else:
+                    endpoints = (
+                        format_node_id(packet.get("from", "")),
+                        format_node_id(packet.get("to", "")),
+                    )
             if db_id:
-                self.state.storage.store_reply_ref(db_id, parent_packet_id, timestamp)
+                self.state.storage.store_reply_ref(
+                    db_id,
+                    parent_packet_id,
+                    timestamp,
+                    channel=channel,
+                    endpoints=endpoints,
+                    broadcast=broadcast,
+                )
 
         # Log to plain text file
         if self.state.text_logger:
@@ -84,72 +149,66 @@ class MeshtasticConnection:
         # Record stats
         self.state.stats.record_packet(packet)
 
-        if portnum in ('TEXT_MESSAGE_APP', '1'):
-            channel = packet.get('channel', 0)
-            to_id = format_node_id(packet.get('to', ''))
-            from_id = format_node_id(packet.get('from', ''))
+        if portnum in ("TEXT_MESSAGE_APP", "1"):
+            channel = packet.get("channel", 0)
+            to_id = format_node_id(packet.get("to", ""))
+            from_id = format_node_id(packet.get("from", ""))
 
             # Check if this is a DM to us (channel 0, to=my_node_id, from someone else)
             if channel == 0 and to_id == self.state.my_node_id and from_id != self.state.my_node_id:
                 # This is an incoming DM
                 self._handle_incoming_dm(packet, from_id, decoded)
 
-        if portnum in ('ROUTING_APP', '65'):
-            request_id = decoded.get('requestId')
+        if portnum in ("ROUTING_APP", "65"):
+            request_id = decoded.get("requestId")
             if request_id:
-                routing = decoded.get('routing', {})
-                error = routing.get('errorReason', '')
-                success = (error == '' or error == 'NONE')
+                routing = decoded.get("routing", {})
+                error = routing.get("errorReason", "")
+                success = error == "" or error == "NONE"
                 self.state.messages.resolve_pending(
-                    request_id,
-                    success,
-                    error_reason=error if not success else None
+                    request_id, success, error_reason=error if not success else None
                 )
 
         # Update node store based on packet type
-        from_id = packet.get('from', packet.get('fromId'))
+        from_id = packet.get("from", packet.get("fromId"))
         if from_id:
             node_update = {}
 
             # Extract SNR/RSSI/Hops
-            if 'rxSnr' in packet:
-                node_update['snr'] = packet['rxSnr']
-            if 'rxRssi' in packet:
-                node_update['rssi'] = packet['rxRssi']
+            if "rxSnr" in packet:
+                node_update["snr"] = packet["rxSnr"]
+            if "rxRssi" in packet:
+                node_update["rssi"] = packet["rxRssi"]
             # Calculate hops from hop_start - hop_limit
-            hop_start = packet.get('hopStart')
-            hop_limit = packet.get('hopLimit')
+            hop_start = packet.get("hopStart")
+            hop_limit = packet.get("hopLimit")
             if hop_start is not None and hop_limit is not None:
-                node_update['hops'] = hop_start - hop_limit
+                node_update["hops"] = hop_start - hop_limit
 
             # Extract data from decoded payload
-            decoded = packet.get('decoded', {})
-            portnum = str(decoded.get('portnum', ''))
+            decoded = packet.get("decoded", {})
+            portnum = str(decoded.get("portnum", ""))
 
-            if portnum in ('NODEINFO_APP', '4'):
-                user = decoded.get('user', {})
+            if portnum in ("NODEINFO_APP", "4"):
+                user = decoded.get("user", {})
                 if user:
-                    node_update['user'] = user
+                    node_update["user"] = user
 
-            elif portnum in ('POSITION_APP', '3'):
-                position = decoded.get('position', {})
+            elif portnum in ("POSITION_APP", "3"):
+                position = decoded.get("position", {})
                 if position:
-                    node_update['position'] = position
+                    node_update["position"] = position
                     # Update my_position if this is from our node
                     if format_node_id(from_id) == self.state.my_node_id:
-                        lat = position.get('latitude', position.get('latitudeI', 0))
-                        lon = position.get('longitude', position.get('longitudeI', 0))
-                        if isinstance(lat, int) and abs(lat) > 1000:
-                            lat = lat / 1e7
-                            lon = lon / 1e7
-                        if lat and lon:
-                            self.state.set_my_position(lat, lon)
+                        coords = position_from_dict(position)
+                        if coords:
+                            self.state.set_my_position(*coords)
 
-            elif portnum in ('TELEMETRY_APP', '67'):
-                telemetry = decoded.get('telemetry', {})
-                device = telemetry.get('deviceMetrics', {})
+            elif portnum in ("TELEMETRY_APP", "67"):
+                telemetry = decoded.get("telemetry", {})
+                device = telemetry.get("deviceMetrics", {})
                 if device:
-                    node_update['deviceMetrics'] = device
+                    node_update["deviceMetrics"] = device
 
             if node_update:
                 self.state.nodes.update_node(from_id, node_update)
@@ -158,6 +217,8 @@ class MeshtasticConnection:
         """Handle a reaction message: store reaction and notify UI."""
         target_packet_id = int(match.group(1))
         emoji = match.group(2)
+        if not _valid_packet_id(target_packet_id):
+            return
 
         # Validate emoji is supported
         if emoji not in SUPPORTED_REACTIONS:
@@ -167,7 +228,23 @@ class MeshtasticConnection:
         if not self.state.storage:
             return
 
-        target_message = self.state.storage.find_message_by_packet_id(target_packet_id)
+        channel = packet.get("channel", 0)
+        endpoints = None
+        broadcast = False
+        if channel == 0:
+            if is_broadcast_destination(packet.get("to")):
+                broadcast = True
+            else:
+                endpoints = (
+                    from_id,
+                    format_node_id(packet.get("to", "")),
+                )
+        target_message = self.state.storage.find_message_by_packet_id(
+            target_packet_id,
+            channel=channel,
+            endpoints=endpoints,
+            broadcast=broadcast,
+        )
         if not target_message:
             return  # Target message not found
 
@@ -177,25 +254,28 @@ class MeshtasticConnection:
             message_packet_id=target_packet_id,
             reactor_node=from_id,
             emoji=emoji,
-            timestamp=timestamp
+            timestamp=timestamp,
         )
 
         # Notify UI to refresh reactions display
-        self.state.messages.notify("reaction_updated", {
-            'message_db_id': target_message.id,
-            'message_packet_id': target_packet_id,
-            'emoji': emoji,
-            'reactor_node': from_id,
-            'added': added
-        })
+        self.state.messages.notify(
+            "reaction_updated",
+            {
+                "message_db_id": target_message.id,
+                "message_packet_id": target_packet_id,
+                "emoji": emoji,
+                "reactor_node": from_id,
+                "added": added,
+            },
+        )
 
     def _handle_incoming_dm(self, packet: dict, from_id: str, decoded: dict):
         """Handle an incoming DM: auto-open channel, increment notifications, notify app."""
         # Get sender name from node store
         node = self.state.nodes.get_node(from_id)
         if node:
-            user = node.get('user', {})
-            sender_name = user.get('shortName') or user.get('longName') or from_id
+            user = node.get("user", {})
+            sender_name = user.get("shortName") or user.get("longName") or from_id
         else:
             sender_name = from_id
 
@@ -206,16 +286,14 @@ class MeshtasticConnection:
         self.state.open_dms.increment_notification(from_id)
 
         # Get message preview (truncate if too long)
-        text = decoded.get('text', '')
-        preview = text[:50] + '...' if len(text) > 50 else text
+        text = decoded.get("text", "")
+        preview = text[:50] + "..." if len(text) > 50 else text
 
         # Notify the app about the incoming DM
-        self.state.messages.notify("dm_received", {
-            'from_id': from_id,
-            'from_name': sender_name,
-            'preview': preview,
-            'packet': packet
-        })
+        self.state.messages.notify(
+            "dm_received",
+            {"from_id": from_id, "from_name": sender_name, "preview": preview, "packet": packet},
+        )
 
     def _on_connected(self, interface, topic=None):
         """Handle connection established."""
@@ -223,18 +301,18 @@ class MeshtasticConnection:
 
         try:
             if interface.myInfo:
-                info['my_node_id'] = format_node_id(interface.myInfo.my_node_num)
+                info["my_node_id"] = format_node_id(interface.myInfo.my_node_num)
 
             if interface.localNode and interface.localNode.localConfig:
                 config = interface.localNode.localConfig
-                if hasattr(config, 'lora'):
-                    info['region'] = str(config.lora.region)
-                    info['modem_preset'] = str(config.lora.modem_preset)
+                if hasattr(config, "lora"):
+                    info["region"] = str(config.lora.region)
+                    info["modem_preset"] = str(config.lora.modem_preset)
 
             # Extract channel names
             if interface.localNode and interface.localNode.channels:
                 for ch in interface.localNode.channels:
-                    if hasattr(ch, 'settings') and ch.settings.name:
+                    if hasattr(ch, "settings") and ch.settings.name:
                         self.state.channel_names[ch.index] = ch.settings.name
 
             # Import existing nodes from interface
@@ -243,16 +321,15 @@ class MeshtasticConnection:
 
                 # Try to get my node's position
                 my_node_num = interface.myInfo.my_node_num if interface.myInfo else None
-                if my_node_num and my_node_num in interface.nodes:
-                    my_node = interface.nodes[my_node_num]
-                    pos = my_node.get('position', {})
-                    lat = pos.get('latitude', pos.get('latitudeI', 0))
-                    lon = pos.get('longitude', pos.get('longitudeI', 0))
-                    if isinstance(lat, int) and abs(lat) > 1000:
-                        lat = lat / 1e7
-                        lon = lon / 1e7
-                    if lat and lon:
-                        self.state.set_my_position(lat, lon)
+                my_node = None
+                if my_node_num and interface.nodesByNum:
+                    my_node = interface.nodesByNum.get(my_node_num)
+                if not my_node and my_node_num and interface.nodes:
+                    my_node = interface.nodes.get(format_node_id(my_node_num))
+                if my_node:
+                    coords = position_from_dict(my_node.get("position", {}))
+                    if coords:
+                        self.state.set_my_position(*coords)
 
         except Exception:
             pass
@@ -272,7 +349,7 @@ class MeshtasticConnection:
     @staticmethod
     def find_ports() -> list:
         """Find available serial ports."""
-        candidates = sorted(glob.glob('/dev/ttyACM*')) + sorted(glob.glob('/dev/ttyUSB*'))
+        candidates = sorted(glob.glob("/dev/ttyACM*")) + sorted(glob.glob("/dev/ttyUSB*"))
         return candidates
 
     @staticmethod
@@ -332,7 +409,9 @@ class MeshtasticConnection:
         pub.unsubscribe(self._on_disconnected, "meshtastic.connection.lost")
         self.disconnect()
 
-    def send_message(self, text: str, dest: Union[int, str] = "^all", channel: int = 0) -> Tuple[bool, Optional[int]]:
+    def send_message(
+        self, text: str, dest: Union[int, str] = "^all", channel: int = 0
+    ) -> Tuple[bool, Optional[int]]:
         """Send a text message.
 
         Args:
@@ -345,14 +424,20 @@ class MeshtasticConnection:
         """
         if not self.interface:
             return False, None
+        if not text_fits_mesh(text):
+            return False, None
         try:
-            mesh_packet = self.interface.sendText(text, destinationId=dest, channelIndex=channel, wantAck=True)
+            mesh_packet = self.interface.sendText(
+                text, destinationId=dest, channelIndex=channel, wantAck=True
+            )
             request_id = mesh_packet.id if mesh_packet else None
             return True, request_id
         except Exception:
             return False, None
 
-    def send_reaction(self, target_packet_id: int, emoji: str, dest: int | str = "^all", channel: int = 0) -> Tuple[bool, Optional[int]]:
+    def send_reaction(
+        self, target_packet_id: int, emoji: str, dest: int | str = "^all", channel: int = 0
+    ) -> Tuple[bool, Optional[int]]:
         """Send a reaction to a message.
 
         Args:
@@ -371,7 +456,9 @@ class MeshtasticConnection:
         reaction_text = f"[R:{target_packet_id}:{emoji}]"
         return self.send_message(reaction_text, dest, channel)
 
-    def send_reply(self, parent_packet_id: int, text: str, dest: int | str = "^all", channel: int = 0) -> Tuple[bool, Optional[int]]:
+    def send_reply(
+        self, parent_packet_id: int, text: str, dest: int | str = "^all", channel: int = 0
+    ) -> Tuple[bool, Optional[int]]:
         """Send a reply to a message.
 
         Args:
@@ -401,65 +488,65 @@ class MeshtasticConnection:
             config = {}
 
             # LoRa config
-            if node.localConfig and hasattr(node.localConfig, 'lora'):
+            if node.localConfig and hasattr(node.localConfig, "lora"):
                 lora = node.localConfig.lora
-                config['lora'] = {
-                    'region': lora.region,
-                    'modem_preset': lora.modem_preset,
-                    'tx_power': lora.tx_power,
-                    'hop_limit': lora.hop_limit,
-                    'tx_enabled': lora.tx_enabled,
+                config["lora"] = {
+                    "region": lora.region,
+                    "modem_preset": lora.modem_preset,
+                    "tx_power": lora.tx_power,
+                    "hop_limit": lora.hop_limit,
+                    "tx_enabled": lora.tx_enabled,
                 }
 
             # Position config
-            if node.localConfig and hasattr(node.localConfig, 'position'):
+            if node.localConfig and hasattr(node.localConfig, "position"):
                 pos = node.localConfig.position
-                config['position'] = {
-                    'gps_mode': pos.gps_mode,
-                    'position_broadcast_secs': pos.position_broadcast_secs,
-                    'fixed_position': pos.fixed_position,
+                config["position"] = {
+                    "gps_mode": pos.gps_mode,
+                    "position_broadcast_secs": pos.position_broadcast_secs,
+                    "fixed_position": pos.fixed_position,
                 }
 
             # Device config
-            if node.localConfig and hasattr(node.localConfig, 'device'):
+            if node.localConfig and hasattr(node.localConfig, "device"):
                 dev = node.localConfig.device
-                config['device'] = {
-                    'role': dev.role,
-                    'rebroadcast_mode': dev.rebroadcast_mode,
-                    'node_info_broadcast_secs': dev.node_info_broadcast_secs,
+                config["device"] = {
+                    "role": dev.role,
+                    "rebroadcast_mode": dev.rebroadcast_mode,
+                    "node_info_broadcast_secs": dev.node_info_broadcast_secs,
                 }
 
             # Telemetry module config
-            if node.moduleConfig and hasattr(node.moduleConfig, 'telemetry'):
+            if node.moduleConfig and hasattr(node.moduleConfig, "telemetry"):
                 telem = node.moduleConfig.telemetry
-                config['telemetry'] = {
-                    'device_update_interval': telem.device_update_interval,
+                config["telemetry"] = {
+                    "device_update_interval": telem.device_update_interval,
                 }
 
             # User/owner info (short name, long name)
             if self.state.my_node_id:
                 my_node = self.state.nodes.get_node(self.state.my_node_id)
                 if my_node:
-                    user = my_node.get('user', {})
-                    config['user'] = {
-                        'short_name': user.get('shortName', ''),
-                        'long_name': user.get('longName', ''),
+                    user = my_node.get("user", {})
+                    config["user"] = {
+                        "short_name": user.get("shortName", ""),
+                        "long_name": user.get("longName", ""),
                     }
 
             # Channels
-            config['channels'] = []
+            config["channels"] = []
             if node.channels:
                 for ch in node.channels:
                     ch_info = {
-                        'index': ch.index,
-                        'role': ch.role,
+                        "index": ch.index,
+                        "role": ch.role,
                     }
-                    if hasattr(ch, 'settings') and ch.settings:
-                        ch_info['name'] = ch.settings.name or ''
-                        ch_info['psk'] = ch.settings.psk.hex() if ch.settings.psk else ''
-                        ch_info['uplink_enabled'] = ch.settings.uplink_enabled
-                        ch_info['downlink_enabled'] = ch.settings.downlink_enabled
-                    config['channels'].append(ch_info)
+                    if hasattr(ch, "settings") and ch.settings:
+                        ch_info["name"] = ch.settings.name or ""
+                        ch_info["psk"] = ch.settings.psk.hex() if ch.settings.psk else ""
+                        ch_info["uplink_enabled"] = ch.settings.uplink_enabled
+                        ch_info["downlink_enabled"] = ch.settings.downlink_enabled
+                    config["channels"].append(ch_info)
 
             return config
 
@@ -498,70 +585,49 @@ class MeshtasticConnection:
         return False
 
     def write_config(self, config_type: str, values: dict) -> bool:
-        """Write configuration to device.
-
-        Args:
-            config_type: One of 'lora', 'position', 'device'
-            values: Dict of config values to set
-
-        Returns:
-            True if successful
-        """
+        """Write configuration to device, restoring cached state on failure."""
         if not self.interface or not self.interface.localNode:
             return False
 
+        node = self.interface.localNode
+        targets = {
+            "lora": node.localConfig.lora,
+            "position": node.localConfig.position,
+            "device": node.localConfig.device,
+        }
+        target = targets.get(config_type)
+        if target is None:
+            return False
+
+        snapshot = target.__class__()
+        snapshot.CopyFrom(target)
         try:
-            node = self.interface.localNode
-
-            if config_type == 'lora':
-                for key, value in values.items():
-                    setattr(node.localConfig.lora, key, value)
-                node.writeConfig('lora')
-
-            elif config_type == 'position':
-                for key, value in values.items():
-                    setattr(node.localConfig.position, key, value)
-                node.writeConfig('position')
-
-            elif config_type == 'device':
-                for key, value in values.items():
-                    setattr(node.localConfig.device, key, value)
-                node.writeConfig('device')
-
-            else:
-                return False
-
+            for key, value in values.items():
+                setattr(target, key, value)
+            node.writeConfig(config_type)
             return True
-
         except Exception:
+            target.CopyFrom(snapshot)
             return False
 
     def write_module_config(self, config_type: str, values: dict) -> bool:
-        """Write module configuration to device.
-
-        Args:
-            config_type: Module config type (e.g., 'telemetry')
-            values: Dict of config values to set
-
-        Returns:
-            True if successful
-        """
+        """Write module configuration, restoring cached state on failure."""
         if not self.interface or not self.interface.localNode:
             return False
 
+        node = self.interface.localNode
+        if config_type != "telemetry":
+            return False
+        target = node.moduleConfig.telemetry
+        snapshot = target.__class__()
+        snapshot.CopyFrom(target)
         try:
-            node = self.interface.localNode
-
-            if config_type == 'telemetry':
-                for key, value in values.items():
-                    setattr(node.moduleConfig.telemetry, key, value)
-                node.writeConfig('telemetry')
-            else:
-                return False
-
+            for key, value in values.items():
+                setattr(target, key, value)
+            node.writeConfig(config_type)
             return True
-
         except Exception:
+            target.CopyFrom(snapshot)
             return False
 
     def write_owner(self, long_name: str = None, short_name: str = None) -> bool:
@@ -578,74 +644,47 @@ class MeshtasticConnection:
             return False
 
         try:
-            self.interface.localNode.setOwner(
-                long_name=long_name,
-                short_name=short_name
-            )
+            self.interface.localNode.setOwner(long_name=long_name, short_name=short_name)
             return True
         except Exception:
             return False
 
     def write_channel(self, index: int, settings: dict) -> bool:
-        """Write channel configuration to device.
-
-        Args:
-            index: Channel index (0-7)
-            settings: Dict with channel settings (name, psk, uplink_enabled, downlink_enabled, role)
-
-        Returns:
-            True if successful
-        """
+        """Write channel configuration, preserving fields the form omits."""
         if not self.interface or not self.interface.localNode:
+            return False
+        if not isinstance(index, int) or not 0 <= index <= 7:
             return False
 
         try:
             from meshtastic.protobuf import channel_pb2
 
             node = self.interface.localNode
-
-            # Get existing channel or create new settings
+            if index >= len(node.channels):
+                return False
+            previous = node.channels[index]
             ch = channel_pb2.Channel()
+            ch.CopyFrom(previous)
             ch.index = index
 
-            # Set role
-            if 'role' in settings:
-                ch.role = settings['role']
+            if "role" in settings:
+                ch.role = settings["role"]
+            if "name" in settings:
+                ch.settings.name = settings["name"]
+            if "psk" in settings:
+                ch.settings.psk = _parse_psk(settings["psk"])
+            if "uplink_enabled" in settings:
+                ch.settings.uplink_enabled = settings["uplink_enabled"]
+            if "downlink_enabled" in settings:
+                ch.settings.downlink_enabled = settings["downlink_enabled"]
 
-            # Set channel settings
-            if 'name' in settings:
-                ch.settings.name = settings['name']
-            if 'psk' in settings:
-                psk = settings['psk']
-                if isinstance(psk, str):
-                    if psk.lower() == 'default':
-                        # Default Meshtastic key (AQ==)
-                        ch.settings.psk = bytes([1])
-                    elif psk.lower() == 'none':
-                        ch.settings.psk = bytes([0])
-                    elif psk.lower() == 'random':
-                        import secrets
-                        ch.settings.psk = secrets.token_bytes(32)
-                    else:
-                        # Try hex decode, then base64
-                        try:
-                            ch.settings.psk = bytes.fromhex(psk)
-                        except ValueError:
-                            import base64
-                            ch.settings.psk = base64.b64decode(psk)
-                else:
-                    ch.settings.psk = psk
-            if 'uplink_enabled' in settings:
-                ch.settings.uplink_enabled = settings['uplink_enabled']
-            if 'downlink_enabled' in settings:
-                ch.settings.downlink_enabled = settings['downlink_enabled']
-
-            # Write the channel
             node.channels[index] = ch
-            node.writeChannel(index)
-
+            try:
+                node.writeChannel(index)
+            except Exception:
+                node.channels[index] = previous
+                raise
             return True
-
         except Exception:
             return False
 
@@ -667,24 +706,28 @@ class MeshtasticConnection:
                     if ch.role == 0:
                         continue
                     # Only include channels with PSK
-                    if hasattr(ch, 'settings') and ch.settings and ch.settings.psk:
+                    if hasattr(ch, "settings") and ch.settings and ch.settings.psk:
                         psk_hex = ch.settings.psk.hex()
                         # Skip empty/default PSK (01 = default unencrypted)
-                        if psk_hex and psk_hex != '00':
-                            channels.append({
-                                'index': ch.index,
-                                'name': ch.settings.name or '',
-                                'role': ch.role,
-                                'psk': psk_hex,
-                                'uplink_enabled': ch.settings.uplink_enabled,
-                                'downlink_enabled': ch.settings.downlink_enabled,
-                            })
+                        if psk_hex and psk_hex != "00":
+                            channels.append(
+                                {
+                                    "index": ch.index,
+                                    "name": ch.settings.name or "",
+                                    "role": ch.role,
+                                    "psk": psk_hex,
+                                    "uplink_enabled": ch.settings.uplink_enabled,
+                                    "downlink_enabled": ch.settings.downlink_enabled,
+                                }
+                            )
             return channels
 
         except Exception:
             return []
 
-    def send_channel_invitation(self, target_node_num: int, channel_settings: dict) -> tuple[bool, str]:
+    def send_channel_invitation(
+        self, target_node_num: int, channel_settings: dict
+    ) -> tuple[bool, str]:
         """Send channel config to remote node via admin message.
 
         Args:
@@ -702,22 +745,22 @@ class MeshtasticConnection:
 
             # Build channel protobuf
             channel = channel_pb2.Channel()
-            channel.index = channel_settings['index']
-            channel.role = channel_settings.get('role', 1)  # SECONDARY by default
+            channel.index = channel_settings["index"]
+            channel.role = channel_settings.get("role", 1)  # SECONDARY by default
 
             # Set channel settings
-            if channel_settings.get('name'):
-                channel.settings.name = channel_settings['name']
-            if channel_settings.get('psk'):
-                psk = channel_settings['psk']
+            if channel_settings.get("name"):
+                channel.settings.name = channel_settings["name"]
+            if channel_settings.get("psk"):
+                psk = channel_settings["psk"]
                 if isinstance(psk, str):
                     channel.settings.psk = bytes.fromhex(psk)
                 else:
                     channel.settings.psk = psk
-            if 'uplink_enabled' in channel_settings:
-                channel.settings.uplink_enabled = channel_settings['uplink_enabled']
-            if 'downlink_enabled' in channel_settings:
-                channel.settings.downlink_enabled = channel_settings['downlink_enabled']
+            if "uplink_enabled" in channel_settings:
+                channel.settings.uplink_enabled = channel_settings["uplink_enabled"]
+            if "downlink_enabled" in channel_settings:
+                channel.settings.downlink_enabled = channel_settings["downlink_enabled"]
 
             # Build admin message
             admin_msg = admin_pb2.AdminMessage()
@@ -802,64 +845,69 @@ class MeshtasticConnection:
 
         try:
             import base64
+
             node = self.interface.localNode
             config = {}
 
             # LoRa config
-            if node.localConfig and hasattr(node.localConfig, 'lora'):
+            if node.localConfig and hasattr(node.localConfig, "lora"):
                 lora = node.localConfig.lora
-                config['lora'] = {
-                    'region': lora.region,
-                    'modem_preset': lora.modem_preset,
-                    'tx_power': lora.tx_power,
-                    'hop_limit': lora.hop_limit,
-                    'tx_enabled': lora.tx_enabled,
+                config["lora"] = {
+                    "region": lora.region,
+                    "modem_preset": lora.modem_preset,
+                    "tx_power": lora.tx_power,
+                    "hop_limit": lora.hop_limit,
+                    "tx_enabled": lora.tx_enabled,
                 }
 
             # Position config
-            if node.localConfig and hasattr(node.localConfig, 'position'):
+            if node.localConfig and hasattr(node.localConfig, "position"):
                 pos = node.localConfig.position
-                config['position'] = {
-                    'gps_mode': pos.gps_mode,
-                    'position_broadcast_secs': pos.position_broadcast_secs,
-                    'fixed_position': pos.fixed_position,
+                config["position"] = {
+                    "gps_mode": pos.gps_mode,
+                    "position_broadcast_secs": pos.position_broadcast_secs,
+                    "fixed_position": pos.fixed_position,
                 }
 
             # Device config
-            if node.localConfig and hasattr(node.localConfig, 'device'):
+            if node.localConfig and hasattr(node.localConfig, "device"):
                 dev = node.localConfig.device
-                config['device'] = {
-                    'role': dev.role,
-                    'rebroadcast_mode': dev.rebroadcast_mode,
-                    'node_info_broadcast_secs': dev.node_info_broadcast_secs,
+                config["device"] = {
+                    "role": dev.role,
+                    "rebroadcast_mode": dev.rebroadcast_mode,
+                    "node_info_broadcast_secs": dev.node_info_broadcast_secs,
                 }
 
             # Owner info
             if self.interface.myInfo:
                 my_node_num = self.interface.myInfo.my_node_num
-                if my_node_num and self.interface.nodes and my_node_num in self.interface.nodes:
-                    my_node = self.interface.nodes[my_node_num]
-                    user = my_node.get('user', {})
-                    config['owner'] = {
-                        'long_name': user.get('longName', ''),
-                        'short_name': user.get('shortName', ''),
+                my_node = None
+                if self.interface.nodesByNum and my_node_num:
+                    my_node = self.interface.nodesByNum.get(my_node_num)
+                if not my_node and self.interface.nodes and my_node_num:
+                    my_node = self.interface.nodes.get(format_node_id(my_node_num))
+                if my_node:
+                    user = my_node.get("user", {})
+                    config["owner"] = {
+                        "long_name": user.get("longName", ""),
+                        "short_name": user.get("shortName", ""),
                     }
 
             # Channels (with PSK as base64 for portability)
-            config['channels'] = []
+            config["channels"] = []
             if node.channels:
                 for ch in node.channels:
                     ch_info = {
-                        'index': ch.index,
-                        'role': ch.role,
+                        "index": ch.index,
+                        "role": ch.role,
                     }
-                    if hasattr(ch, 'settings') and ch.settings:
-                        ch_info['name'] = ch.settings.name or ''
+                    if hasattr(ch, "settings") and ch.settings:
+                        ch_info["name"] = ch.settings.name or ""
                         if ch.settings.psk:
-                            ch_info['psk_b64'] = base64.b64encode(ch.settings.psk).decode('ascii')
-                        ch_info['uplink_enabled'] = ch.settings.uplink_enabled
-                        ch_info['downlink_enabled'] = ch.settings.downlink_enabled
-                    config['channels'].append(ch_info)
+                            ch_info["psk_b64"] = base64.b64encode(ch.settings.psk).decode("ascii")
+                        ch_info["uplink_enabled"] = ch.settings.uplink_enabled
+                        ch_info["downlink_enabled"] = ch.settings.downlink_enabled
+                    config["channels"].append(ch_info)
 
             return True, config, "Config exported successfully"
 
@@ -879,56 +927,51 @@ class MeshtasticConnection:
             return False, [], "Not connected to device"
 
         import base64
+
         errors = []
 
         try:
             # Restore LoRa config
-            if 'lora' in config:
-                try:
-                    self.write_config('lora', config['lora'])
-                except Exception as e:
-                    errors.append(f"LoRa: {e}")
+            if "lora" in config:
+                if not self.write_config("lora", config["lora"]):
+                    errors.append("LoRa: write failed")
 
             # Restore position config
-            if 'position' in config:
-                try:
-                    self.write_config('position', config['position'])
-                except Exception as e:
-                    errors.append(f"Position: {e}")
+            if "position" in config:
+                if not self.write_config("position", config["position"]):
+                    errors.append("Position: write failed")
 
             # Restore device config
-            if 'device' in config:
-                try:
-                    self.write_config('device', config['device'])
-                except Exception as e:
-                    errors.append(f"Device: {e}")
+            if "device" in config:
+                if not self.write_config("device", config["device"]):
+                    errors.append("Device: write failed")
 
             # Restore owner info
-            if 'owner' in config:
-                try:
-                    owner = config['owner']
-                    self.write_owner(
-                        long_name=owner.get('long_name'),
-                        short_name=owner.get('short_name')
-                    )
-                except Exception as e:
-                    errors.append(f"Owner: {e}")
+            if "owner" in config:
+                owner = config["owner"]
+                if not self.write_owner(
+                    long_name=owner.get("long_name"),
+                    short_name=owner.get("short_name"),
+                ):
+                    errors.append("Owner: write failed")
 
             # Restore channels
-            if 'channels' in config:
-                for ch_config in config['channels']:
+            if "channels" in config:
+                for ch_config in config["channels"]:
                     try:
                         ch_settings = {
-                            'index': ch_config['index'],
-                            'role': ch_config.get('role', 0),
-                            'name': ch_config.get('name', ''),
-                            'uplink_enabled': ch_config.get('uplink_enabled', False),
-                            'downlink_enabled': ch_config.get('downlink_enabled', False),
+                            "index": ch_config["index"],
+                            "role": ch_config.get("role", 0),
+                            "name": ch_config.get("name", ""),
+                            "uplink_enabled": ch_config.get("uplink_enabled", False),
+                            "downlink_enabled": ch_config.get("downlink_enabled", False),
                         }
-                        # Decode PSK from base64
-                        if 'psk_b64' in ch_config:
-                            ch_settings['psk'] = base64.b64decode(ch_config['psk_b64'])
-                        self.write_channel(ch_config['index'], ch_settings)
+                        if "psk_b64" in ch_config:
+                            ch_settings["psk"] = base64.b64decode(
+                                ch_config["psk_b64"], validate=True
+                            )
+                        if not self.write_channel(ch_config["index"], ch_settings):
+                            errors.append(f"Channel {ch_config.get('index', '?')}: write failed")
                     except Exception as e:
                         errors.append(f"Channel {ch_config.get('index', '?')}: {e}")
 

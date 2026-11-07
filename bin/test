@@ -27,34 +27,35 @@ fi
 source "$VENV_DIR/bin/activate"
 
 # Default pytest args
-PYTEST_ARGS="-v --tb=short"
+PYTEST_ARGS=(-v --tb=short)
 
 # Handle special first argument for test categories
 case "${1:-}" in
     unit)
         shift
-        PYTEST_ARGS="$PYTEST_ARGS tests/unit/ $*"
+        PYTEST_ARGS+=(tests/unit/)
         ;;
     integration)
         shift
-        PYTEST_ARGS="$PYTEST_ARGS tests/integration/ $*"
+        PYTEST_ARGS+=(tests/integration/)
         ;;
     ui)
         shift
-        PYTEST_ARGS="$PYTEST_ARGS tests/ui/ -m ui $*"
+        PYTEST_ARGS+=(tests/ui/ -m ui)
         ;;
     --cov)
         shift
-        PYTEST_ARGS="$PYTEST_ARGS --cov=meshterm --cov-report=term-missing tests/ $*"
+        PYTEST_ARGS+=(--cov=meshterm --cov-report=term-missing tests/)
         ;;
     "")
-        PYTEST_ARGS="$PYTEST_ARGS tests/"
+        PYTEST_ARGS+=(tests/)
         ;;
     *)
-        # Pass all args directly to pytest
-        PYTEST_ARGS="$PYTEST_ARGS tests/ $*"
+        PYTEST_ARGS+=(tests/)
         ;;
 esac
 
-echo "Running: pytest $PYTEST_ARGS"
-exec pytest $PYTEST_ARGS
+PYTEST_ARGS+=("$@")
+
+echo "Running: pytest ${PYTEST_ARGS[*]}"
+exec pytest "${PYTEST_ARGS[@]}"

@@ -1,5 +1,6 @@
 """Chat view - IRC-style chat with channel filtering."""
 
+import threading
 from typing import Union
 from textual.app import ComposeResult
 from textual.containers import Container
@@ -100,6 +101,7 @@ class ChatView(Container):
         # Update header bar
         try:
             from ..widgets.header_bar import HeaderBar
+
             header = self.app.query_one("#header-bar", HeaderBar)
             header.set_active_subtab(channel)
         except Exception:
@@ -111,7 +113,11 @@ class ChatView(Container):
         if not tabs:
             return
 
-        current_str = str(self.current_channel) if isinstance(self.current_channel, int) else self.current_channel
+        current_str = (
+            str(self.current_channel)
+            if isinstance(self.current_channel, int)
+            else self.current_channel
+        )
         try:
             current_idx = tabs.index(current_str)
             next_idx = (current_idx + 1) % len(tabs)
@@ -126,7 +132,11 @@ class ChatView(Container):
         if not tabs:
             return
 
-        current_str = str(self.current_channel) if isinstance(self.current_channel, int) else self.current_channel
+        current_str = (
+            str(self.current_channel)
+            if isinstance(self.current_channel, int)
+            else self.current_channel
+        )
         try:
             current_idx = tabs.index(current_str)
             prev_idx = (current_idx - 1) % len(tabs)
@@ -190,27 +200,27 @@ class ChatView(Container):
 
     def _get_sender_name(self, packet: dict) -> str:
         """Get display name for a packet's sender."""
-        from_id = packet.get('from', packet.get('fromId'))
+        from_id = packet.get("from", packet.get("fromId"))
         sender_name = format_node_id(from_id) if from_id else "?"
         if from_id:
             node = self.state.nodes.get_node(from_id)
             if node:
-                user = node.get('user', {})
-                sender_name = user.get('shortName') or user.get('longName') or sender_name
+                user = node.get("user", {})
+                sender_name = user.get("shortName") or user.get("longName") or sender_name
         return sender_name
 
     def on_chat_log_message_selected(self, event: ChatLog.MessageSelected):
         """Handle message selection - show action menu."""
         entry = event.entry
-        packet = entry.get('packet', {})
+        packet = entry.get("packet", {})
         sender_name = self._get_sender_name(packet)
 
-        is_own = packet.get('_tx', False)
-        delivered = packet.get('_delivered')
+        is_own = packet.get("_tx", False)
+        delivered = packet.get("_delivered")
         can_retransmit = is_own and delivered is not True
 
         # Show DM option if it's someone else's message and we're not already in a DM with them
-        from_id = packet.get('from', packet.get('fromId'))
+        from_id = packet.get("from", packet.get("fromId"))
         in_dm_with_sender = (
             isinstance(self.current_channel, str)
             and self.current_channel.startswith("dm:")
@@ -218,13 +228,16 @@ class ChatView(Container):
         )
         show_dm = not is_own and not in_dm_with_sender
 
-        self.app.push_screen(MessageActionMenu(
-            entry=entry,
-            sender_name=sender_name,
-            is_own_message=is_own,
-            can_retransmit=can_retransmit,
-            show_dm=show_dm,
-        ), self._handle_action_result)
+        self.app.push_screen(
+            MessageActionMenu(
+                entry=entry,
+                sender_name=sender_name,
+                is_own_message=is_own,
+                can_retransmit=can_retransmit,
+                show_dm=show_dm,
+            ),
+            self._handle_action_result,
+        )
 
     def on_chat_log_selection_cancelled(self, event: ChatLog.SelectionCancelled):
         """Handle selection mode cancellation."""
@@ -238,7 +251,7 @@ class ChatView(Container):
             return
 
         action, entry = result
-        packet = entry.get('packet', {})
+        packet = entry.get("packet", {})
         sender_name = self._get_sender_name(packet)
 
         if action == "reply":
@@ -246,10 +259,12 @@ class ChatView(Container):
             chat_input.set_reply_mode(entry, sender_name)
             self._focus_input()
         elif action == "react":
+
             def handle_reaction(reaction_result):
                 if reaction_result is not None:
                     self._send_reaction(entry, reaction_result)
                 self._focus_input()
+
             self.app.push_screen(ReactionPicker(entry, sender_name), handle_reaction)
         elif action == "details":
             self.app.push_screen(
@@ -257,7 +272,7 @@ class ChatView(Container):
                 lambda _: self._focus_input(),
             )
         elif action == "dm":
-            from_id = packet.get('from', packet.get('fromId'))
+            from_id = packet.get("from", packet.get("fromId"))
             if from_id:
                 node_id = format_node_id(from_id)
                 self.state.open_dms.open_dm(node_id, sender_name)
@@ -269,28 +284,30 @@ class ChatView(Container):
 
     def _retransmit_message(self, entry: dict):
         """Re-transmit a failed/pending message."""
-        packet = entry.get('packet', {})
-        decoded = packet.get('decoded', {})
-        text = decoded.get('text', '')
+        packet = entry.get("packet", {})
+        decoded = packet.get("decoded", {})
+        text = decoded.get("text", "")
         if not text:
             return
 
-        dest = packet.get('to', '^all')
-        channel = packet.get('channel', 0)
-        reply_to = packet.get('_reply_to_packet_id')
+        dest = packet.get("to", "^all")
+        channel = packet.get("channel", 0)
+        reply_to = packet.get("_reply_to_packet_id")
 
         chat_input = self.query_one("#chat-input", ChatInput)
-        chat_input.post_message(ChatInput.MessageSubmitted(
-            text=text,
-            channel=channel,
-            dest_node_id=dest if dest not in ('^all', '!ffffffff', 4294967295) else None,
-            reply_to_packet_id=reply_to,
-        ))
+        chat_input.post_message(
+            ChatInput.MessageSubmitted(
+                text=text,
+                channel=channel,
+                dest_node_id=dest if dest not in ("^all", "!ffffffff", 4294967295) else None,
+                reply_to_packet_id=reply_to,
+            )
+        )
 
     def _send_reaction(self, entry: dict, emoji: str):
         """Send a reaction emoji to a message."""
-        packet = entry.get('packet', {})
-        packet_id = packet.get('id')
+        packet = entry.get("packet", {})
+        packet_id = packet.get("id")
 
         if not packet_id:
             self.app.notify("Cannot react: message has no packet ID", severity="error")
@@ -304,7 +321,7 @@ class ChatView(Container):
             dest = "^all"
             channel = self.current_channel if isinstance(self.current_channel, int) else 0
 
-        if hasattr(self.app, 'connection'):
+        if hasattr(self.app, "connection"):
             success, _ = self.app.connection.send_reaction(packet_id, emoji, dest, channel)
             if success:
                 self.app.notify(f"Reacted with {emoji}", timeout=2)
@@ -349,19 +366,26 @@ class ChatView(Container):
         self.app.push_screen(ChannelManager(self.state), handle_result)
 
     def _handle_delivery_event(self, event_type: str, data):
-        """Unlock input when delivery status is updated."""
-        if event_type == "delivery_updated":
-            try:
-                self.app.call_from_thread(self._unlock_if_locked)
-            except Exception:
-                pass
+        """Unlock input when the matching delivery status is updated."""
+        if event_type != "delivery_updated":
+            return
+        request_id = data.get("id") if data else None
+        app_thread = getattr(self.app, "_thread_id", None)
+        if app_thread is not None and threading.get_ident() != app_thread:
+            self.app.call_from_thread(self._unlock_if_locked, request_id)
+        else:
+            self._unlock_if_locked(request_id)
 
-    def _unlock_if_locked(self):
-        """Thread-safe unlock — must be called on the main Textual thread."""
+    def _unlock_if_locked(self, request_id=None):
+        """Unlock only when the confirmed request matches the locked send."""
         try:
             chat_input = self.query_one("#chat-input", ChatInput)
-            if chat_input.send_locked:
-                chat_input.unlock_input()
+            if not chat_input.send_locked:
+                return
+            locked_id = chat_input.send_locked_request_id
+            if request_id is not None and locked_id is not None and request_id != locked_id:
+                return
+            chat_input.unlock_input()
         except Exception:
             pass
 

@@ -1,15 +1,17 @@
 """Inline chat input widget with channel selector."""
 
+from typing import Optional
+
+from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Static, Input
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.reactive import reactive
-from rich.text import Text
+from textual.widgets import Input, Static
 
+from ..formatting import Colors, text_fits_mesh
 from ..state import AppState
-from ..formatting import Colors
 
 
 class ChatInput(Vertical):
@@ -76,11 +78,7 @@ class ChatInput(Vertical):
         """Posted when a message is submitted."""
 
         def __init__(
-            self,
-            text: str,
-            channel: int,
-            dest_node_id: str = None,
-            reply_to_packet_id: int = None
+            self, text: str, channel: int, dest_node_id: str = None, reply_to_packet_id: int = None
         ):
             self.text = text
             self.channel = channel
@@ -90,18 +88,24 @@ class ChatInput(Vertical):
 
     class ReplyCancelled(Message):
         """Posted when reply mode is cancelled."""
+
         pass
 
     def __init__(self, state: AppState, **kwargs):
         super().__init__(**kwargs)
         self.state = state
         self._lock_timeout_timer = None
+        self.send_locked_request_id = None
 
     def compose(self) -> ComposeResult:
         yield Static(self._format_reply_context(), classes="reply-context", id="reply-context")
         with Horizontal(classes="input-row"):
-            yield Static(self._format_channel(), classes="channel-indicator", id="channel-indicator")
-            yield Input(placeholder="Type message...", classes="chat-input-field", id="chat-input-field")
+            yield Static(
+                self._format_channel(), classes="channel-indicator", id="channel-indicator"
+            )
+            yield Input(
+                placeholder="Type message...", classes="chat-input-field", id="chat-input-field"
+            )
 
     def _format_channel(self) -> Text:
         """Format channel indicator: Ch:[N] or DM:Name with hint."""
@@ -132,10 +136,10 @@ class ChatInput(Vertical):
         text.append(self.reply_to_name or "?", style="bold bright_cyan")
 
         # Get message preview
-        packet = self.reply_to_entry.get('packet', {})
-        decoded = packet.get('decoded', {})
-        msg_text = decoded.get('text', '')
-        preview = msg_text[:40] + '...' if len(msg_text) > 40 else msg_text
+        packet = self.reply_to_entry.get("packet", {})
+        decoded = packet.get("decoded", {})
+        msg_text = decoded.get("text", "")
+        preview = msg_text[:40] + "..." if len(msg_text) > 40 else msg_text
         text.append(f': "{preview}"', style="dim italic")
         text.append("  [Esc to cancel]", style="dim")
         return text
@@ -156,13 +160,20 @@ class ChatInput(Vertical):
         else:
             context.remove_class("visible")
 
-    def lock_input(self, reason: str = "Awaiting delivery...", timeout_seconds: float = 10.0):
-        """Lock input until message delivery is confirmed."""
+    def lock_input(
+        self,
+        reason: str = "Awaiting delivery...",
+        timeout_seconds: float = 10.0,
+        request_id: Optional[int] = None,
+    ):
+        """Lock input until the matching delivery confirmation arrives."""
         self.send_locked = True
+        self.send_locked_request_id = request_id
         self.lock_reason = reason
         try:
             input_field = self.query_one("#chat-input-field", Input)
             input_field.disabled = True
+            input_field.placeholder = reason
         except Exception:
             pass
         self._update_channel_display()
@@ -176,10 +187,12 @@ class ChatInput(Vertical):
         if not self.send_locked:
             return
         self.send_locked = False
+        self.send_locked_request_id = None
         self.lock_reason = ""
         try:
             input_field = self.query_one("#chat-input-field", Input)
             input_field.disabled = False
+            input_field.placeholder = "Type message..."
             input_field.focus()
         except Exception:
             pass
@@ -192,7 +205,7 @@ class ChatInput(Vertical):
     def _on_lock_timeout(self):
         """Safety timeout - unlock input if ACK never arrives."""
         self.unlock_input()
-        self.app.notify("Send timeout - input unlocked", severity="warning", timeout=3)
+        self.app.notify("Send timeout", severity="warning", timeout=3)
 
     def set_channel(self, channel: int):
         """Set the channel (broadcast mode)."""
@@ -252,6 +265,7 @@ class ChatInput(Vertical):
         # Third priority: go back to channel selection (header bar)
         try:
             from .header_bar import HeaderBar
+
             header = self.app.query_one("#header-bar", HeaderBar)
             header.focus()
         except Exception:
@@ -265,20 +279,27 @@ class ChatInput(Vertical):
                 return
             text = event.input.value.strip()
             if text:
-                # Get reply-to packet ID if in reply mode
                 reply_to_packet_id = None
                 if self.reply_to_entry:
-                    packet = self.reply_to_entry.get('packet', {})
-                    reply_to_packet_id = packet.get('id')
-
-                self.post_message(self.MessageSubmitted(
-                    text,
-                    self.channel,
-                    self.dm_node_id,
-                    reply_to_packet_id
-                ))
-
-                # Clear input and reply mode
+                    packet = self.reply_to_entry.get("packet", {})
+                    reply_to_packet_id = packet.get("id")
+                overhead = len(f"[>:{reply_to_packet_id}] ") if reply_to_packet_id else 0
+                if not text_fits_mesh(text, overhead):
+                    self.app.notify(
+                        "Message is too long for the mesh; draft kept.",
+                        severity="error",
+                        timeout=3,
+                        markup=False,
+                    )
+                    return
+                self.post_message(
+                    self.MessageSubmitted(
+                        text,
+                        self.channel,
+                        self.dm_node_id,
+                        reply_to_packet_id,
+                    )
+                )
                 event.input.value = ""
                 self.clear_reply_mode()
 
@@ -290,6 +311,7 @@ class ChatInput(Vertical):
         """Scroll the chat log up (Page Up)."""
         try:
             from .chat_log import ChatLog
+
             chat_log = self.app.query_one("#chat-log", ChatLog)
             chat_log.action_page_up()
         except Exception:
@@ -299,6 +321,7 @@ class ChatInput(Vertical):
         """Scroll the chat log down (Page Down)."""
         try:
             from .chat_log import ChatLog
+
             chat_log = self.app.query_one("#chat-log", ChatLog)
             chat_log.action_page_down()
         except Exception:

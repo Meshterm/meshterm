@@ -7,7 +7,7 @@ from textual.message import Message
 from rich.text import Text
 
 from ..state import AppState
-from ..formatting import Colors
+from ..formatting import Colors, text_fits_mesh
 
 
 class DMInput(Horizontal):
@@ -68,28 +68,36 @@ class DMInput(Horizontal):
             # Check PKI status before sending
             node = self.state.nodes.get_node(dest_node_id)
             if node:
-                has_key = node.get('has_public_key', False)
+                has_key = node.get("has_public_key", False)
                 if not has_key:
-                    has_key = bool(node.get('user', {}).get('publicKey'))
+                    has_key = bool(node.get("user", {}).get("publicKey"))
 
                 if not has_key:
                     self.app.notify(
                         "Cannot send DM: No public key. Wait for key exchange.",
                         severity="warning",
-                        timeout=5
+                        timeout=5,
                     )
                     return
 
                 # Check if node is unmessagable
-                if node.get('user', {}).get('isUnmessagable'):
+                if node.get("user", {}).get("isUnmessagable"):
                     self.app.notify(
                         "Cannot send DM: Node is marked as unmessagable",
                         severity="warning",
-                        timeout=5
+                        timeout=5,
                     )
                     return
 
             if text:
+                if not text_fits_mesh(text):
+                    self.app.notify(
+                        "Message is too long for the mesh; draft kept.",
+                        severity="error",
+                        timeout=3,
+                        markup=False,
+                    )
+                    return
                 self.post_message(self.MessageSubmitted(text, dest_node_id))
                 event.input.value = ""
 
