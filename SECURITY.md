@@ -17,8 +17,8 @@ Report vulnerabilities privately through GitHub Security Advisories on
 - `uv` resolves with a three-day dependency cooldown (`exclude-newer = "P3D"`)
   so a freshly published malicious release is not adopted immediately.
 - GitHub Actions are pinned to commit SHAs. CI has read-only permissions.
-- CI runs `pip-audit`, `bandit -ll`, `detect-secrets-hook`, and optionally
-  `gitleaks` when `GITLEAKS_LICENSE` is configured.
+- CI runs `pip-audit`, `bandit -ll`, `detect-secrets-hook`, and the MIT
+  `gitleaks` CLI pinned by version and SHA-256 checksum.
 - New dependencies require review: check the package owner, release history,
   source repository, and PyPI provenance before adding them.
 - Do not test write paths against a live mesh. Use fake interfaces for failure

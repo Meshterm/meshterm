@@ -1,4 +1,0 @@
-meshtastic
-textual
-reverse_geocoder
-pgeocode

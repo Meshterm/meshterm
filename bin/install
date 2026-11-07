@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -12,14 +12,46 @@ cd "$PROJECT_DIR"
 # Create virtual environment if it doesn't exist
 if [ ! -d "$PROJECT_DIR/venv" ]; then
     echo "Creating virtual environment..."
-    python3 -m venv "$PROJECT_DIR/venv"
+    if command -v uv >/dev/null 2>&1; then
+        uv venv --python "${PYTHON_VERSION:-3.11}" "$PROJECT_DIR/venv"
+    else
+        python3 -m venv "$PROJECT_DIR/venv"
+    fi
 else
     echo "Virtual environment already exists"
 fi
 
-echo "Installing dependencies..."
-"$PROJECT_DIR/venv/bin/python" -m pip install --quiet --upgrade pip
-"$PROJECT_DIR/venv/bin/python" -m pip install --quiet -c "$PROJECT_DIR/constraints.txt" -r "$PROJECT_DIR/requirements.txt"
+echo "Installing locked dependencies..."
+export PIP_CONFIG_FILE=/dev/null
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+
+if command -v uv >/dev/null 2>&1; then
+    uv pip install --python "$PROJECT_DIR/venv/bin/python" \
+        --index-url https://pypi.org/simple \
+        --require-hashes \
+        --no-build-isolation \
+        -r "$PROJECT_DIR/requirements/runtime.lock"
+    uv pip install --python "$PROJECT_DIR/venv/bin/python" \
+        --no-index \
+        --no-deps \
+        --no-build-isolation \
+        -e "$PROJECT_DIR"
+else
+    if ! "$PROJECT_DIR/venv/bin/python" -m pip --version >/dev/null 2>&1; then
+        echo "pip is unavailable. Install python3-venv or uv, then retry." >&2
+        exit 1
+    fi
+    "$PROJECT_DIR/venv/bin/python" -m pip install --quiet \
+        --index-url https://pypi.org/simple \
+        --require-hashes \
+        --no-build-isolation \
+        -r "$PROJECT_DIR/requirements/runtime.lock"
+    "$PROJECT_DIR/venv/bin/python" -m pip install --quiet \
+        --no-index \
+        --no-deps \
+        --no-build-isolation \
+        -e "$PROJECT_DIR"
+fi
 
 echo "─────────────────────────────────────"
 echo "Done! Run with: bin/run [port]"

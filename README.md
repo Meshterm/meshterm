@@ -48,12 +48,13 @@ pip install git+https://github.com/Meshterm/meshterm.git
 git clone https://github.com/Meshterm/meshterm.git
 cd meshterm
 
-# Option 1: Install with pip (editable mode for development)
-pip install -e .
+# Hash-locked install (recommended)
+bin/install   # Creates venv and installs from requirements/runtime.lock
+bin/run
 
-# Option 2: Use the provided scripts
-bin/install   # Creates venv and installs dependencies
-bin/run       # Runs the application
+# Development install (hash-locked)
+python -m pip install --require-hashes --no-build-isolation -r requirements/dev.lock
+python -m pip install --no-index --no-deps --no-build-isolation -e .
 ```
 
 ### Requirements

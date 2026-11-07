@@ -1,0 +1,8 @@
+title = "meshterm gitleaks policy"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "detect-secrets baseline stores hashed findings, not live secrets"
+paths = ['''\.secrets\.baseline$''']
