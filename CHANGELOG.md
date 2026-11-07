@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.2.0] - 2026-11-07
 
 ### Security
 - Sanitize untrusted text and disable markup rendering for external data.

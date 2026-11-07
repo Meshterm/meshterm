@@ -29,6 +29,12 @@ if command -v uv >/dev/null 2>&1; then
     uv pip install --python "$PROJECT_DIR/venv/bin/python" \
         --index-url https://pypi.org/simple \
         --require-hashes \
+        --no-deps \
+        --no-build-isolation \
+        -r "$PROJECT_DIR/requirements/build.lock"
+    uv pip install --python "$PROJECT_DIR/venv/bin/python" \
+        --index-url https://pypi.org/simple \
+        --require-hashes \
         --no-build-isolation \
         -r "$PROJECT_DIR/requirements/runtime.lock"
     uv pip install --python "$PROJECT_DIR/venv/bin/python" \
@@ -41,6 +47,12 @@ else
         echo "pip is unavailable. Install python3-venv or uv, then retry." >&2
         exit 1
     fi
+    "$PROJECT_DIR/venv/bin/python" -m pip install --quiet \
+        --index-url https://pypi.org/simple \
+        --require-hashes \
+        --no-deps \
+        --no-build-isolation \
+        -r "$PROJECT_DIR/requirements/build.lock"
     "$PROJECT_DIR/venv/bin/python" -m pip install --quiet \
         --index-url https://pypi.org/simple \
         --require-hashes \
