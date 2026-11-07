@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/meshterm-banner.png" alt="meshterm" width="720"></p>
+
 # MeshTerm
 
 A terminal user interface (TUI) for monitoring and interacting with Meshtastic mesh networks.
