@@ -37,7 +37,7 @@ class ChatInput(Vertical):
     }
 
     ChatInput .input-row {
-        height: 1;
+        height: 3;
         width: 100%;
     }
 
@@ -51,8 +51,8 @@ class ChatInput(Vertical):
     ChatInput .chat-input-field {
         width: 1fr;
         border: none;
-        height: 1;
-        padding: 0;
+        height: 3;
+        padding: 0 1;
     }
     """
 

@@ -18,6 +18,8 @@
 - Respect the active log filter for live packets and keep reply previews attached to the direct parent.
 - Convert empty owner names and meshtastic `SystemExit` paths into write failures instead of exiting the TUI.
 - Ignore stale interface events and make repeated connection-established events idempotent.
+- Show typed text in the chat composer instead of clipping it to a one-line input.
+- Make header tabs selectable with the mouse.
 
 ### Changed
 - Require Python 3.10 or newer.

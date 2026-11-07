@@ -1,6 +1,7 @@
 """Header bar widget showing tabs and mode indicators."""
 
 from typing import List
+from textual import events
 from textual.widgets import Static
 from textual.reactive import reactive
 from textual.binding import Binding
@@ -94,6 +95,7 @@ class HeaderBar(Static):
         super().__init__(**kwargs)
         self.state = state
         self.state.open_dms.subscribe(self._handle_dm_event)
+        self._tab_regions = []
 
     def _handle_dm_event(self, event_type: str, data):
         """Handle DM state changes."""
@@ -219,11 +221,13 @@ class HeaderBar(Static):
     def render(self) -> Text:
         """Render the header bar."""
         text = Text()
+        self._tab_regions = []
         is_focused = self.has_focus
         tabs = self._get_current_tabs()
 
         if self.context != "main":
             # Render back button first
+            start = cell_len(text.plain)
             is_highlighted = is_focused and self.highlighted_idx == 0
             if is_highlighted:
                 text.append("<-[", style="bold bright_yellow")
@@ -234,9 +238,11 @@ class HeaderBar(Static):
                 text.append("Esc", style="bright_white")
                 text.append("]", style=Colors.DIM)
             text.append(" ")
+            self._tab_regions.append((start, cell_len(text.plain), "back"))
 
         # Render tabs
         for i, tab_id in enumerate(tabs):
+            start = cell_len(text.plain)
             # Handle DM tabs specially
             if tab_id.startswith("dm:"):
                 node_id = tab_id[3:]  # Remove "dm:" prefix
@@ -291,6 +297,7 @@ class HeaderBar(Static):
                 text.append("]", style=Colors.DIM)
                 text.append(suffix, style=Colors.DIM)
             text.append(" ")
+            self._tab_regions.append((start, cell_len(text.plain), tab_id))
 
         # Calculate padding to push hints to the right edge
         context_hint = "[^r]" if self.context == "chat" else ""
@@ -311,6 +318,25 @@ class HeaderBar(Static):
         text.append("[^h]", style=Colors.DIM)
 
         return text
+
+    def on_click(self, event: events.Click):
+        """Select a tab when its rendered label is clicked."""
+        self.focus()
+        for start, end, tab_id in self._tab_regions:
+            if start <= event.x < end:
+                if tab_id == "back":
+                    self.post_message(self.BackRequested())
+                elif self.context == "main":
+                    tabs = self._get_current_tabs()
+                    if tab_id in tabs:
+                        self.highlighted_idx = tabs.index(tab_id)
+                    self.post_message(self.TabSelected(tab_id))
+                else:
+                    tabs = self._get_current_tabs()
+                    if tab_id in tabs:
+                        self.highlighted_idx = tabs.index(tab_id) + 1
+                    self.post_message(self.SubTabSelected(tab_id))
+                return
 
     def on_unmount(self):
         """Cleanup subscriptions."""
